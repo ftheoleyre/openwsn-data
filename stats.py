@@ -63,13 +63,10 @@ def links_get(con):
         cur2 = con.cursor()
         asn_end = None
         
-        
-        print('SELECT asn  FROM schedule WHERE type="TX" AND shared="0" AND event="DEL" AND moteid="{0}" AND neighbor="{1}" AND slotOffset="{2}" '.format(row[0], row[1], row[5]))
- 
+  
             
         for row2 in cur2.execute('SELECT asn  FROM schedule WHERE type="TX" AND shared="0" AND event="DEL" AND moteid="{0}" AND neighbor="{1}" AND slotOffset="{2}" '.format(row[0], row[1], row[5])):
-            print("ASN end for {1}/{2}: {0}".format(row2, row[5], row[6]))
-            
+             
             #keep the smallest ASN larger than the start_asn
             if row2[0] > row[4] and ( asn_end is None or row2[0] < asn_end):
                 asn_end = row2[0]
@@ -102,8 +99,9 @@ def packets_end2end(con):
             for row in results:
                 print(row)
         else:
-            print("buffer pos {0}".format(buffer_pos))
-        
+            buffer_pos = results[0][0]
+         
+         
         
         #for each hop, computes the duration in the queue
         asn_add = asn_gen
@@ -114,9 +112,23 @@ def packets_end2end(con):
         
         #get the corresponding list of TX
         cur_tx = con.cursor()
-        for tx in cur_tx.execute('SELECT asn, slotOffset, channelOffset FROM pkt WHERE moteid="{0}" AND event="TX" AND buffer_pos="{1}" AND asn<="{2}" AND asn>="{3}" '.format(moteid, buffer_pos, asn_del, asn_add )):
-            print(tx)
-
+        for tx in cur_tx.execute('SELECT asn, slotOffset, channelOffset FROM pkt WHERE moteid="{0}" AND event="TX" AND type="DATA" AND buffer_pos="{1}" AND asn<="{2}" AND asn>="{3}" '.format(moteid, buffer_pos, asn_del, asn_add)):
+            print("txdata: asn={0}".format(tx[0]))
+        
+            #and the coresponding list of RX
+            cur_txack = con.cursor()
+            for txack in cur_txack.execute('SELECT moteid, buffer_pos FROM pkt WHERE event="TX" AND type="ACK" AND asn="{0}"'.format(tx[0])):
+                print("txack: {0}".format(txack))
+                
+                
+            #and the coresponding list rcved acks
+            cur_rxack = con.cursor()
+            for rxack in cur_rxack.execute('SELECT moteid, buffer_pos FROM pkt WHERE event="RX" AND type="ACK" AND asn="{0}" '.format(tx[0])):
+                print("rxack: {0}".format(rxack))
+             
+       
+       
+       
        
     return(packets)
         
