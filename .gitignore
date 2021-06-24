@@ -134,3 +134,4 @@ openwsn-data.xcodeproj/
 #results
 results/
 openv_events.db
+openv_events-short.db
