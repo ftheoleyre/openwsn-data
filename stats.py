@@ -30,6 +30,19 @@ import numpy as np
 #FIFO
 from collections import deque
 
+
+DEBUG = False
+
+
+class rxFound(Exception):
+    """
+    The final destinatio has been found
+    """
+    pass
+    
+    
+
+
 #initialization: args + sqlite connection
 def init():
     #parsing arguments
@@ -51,6 +64,25 @@ def motes_get(con):
     for row in cur.execute('SELECT DISTINCT moteid FROM sixtopStates'):
         motes.append(row[0])
     return(motes)
+
+
+#returns the list of dagroot ids
+def dagroot_ids_get(con):
+    dagroot_ids = []
+    cur = con.cursor()
+    for row in cur.execute('SELECT DISTINCT moteid FROM config WHERE rpl_dagroot="1"'):
+        dagroot_ids.append(row[0])
+    return(dagroot_ids)
+
+
+
+#returns the largest ASN in the experiment
+def asn_end_get(con):
+    cur = con.cursor()
+    for row in cur.execute('SELECT MAX(asn) as max FROM queue'):
+        return(row[0])
+    return(0)
+
 
 
 
@@ -76,10 +108,131 @@ def links_get(con):
     return(links)
 
 
+##returns the list of receivers for this l2 transmission
+def l2receivers_get(con, l2src, asn):
+
+    receivers = []
+    cur_rx = con.cursor()
+    for rx in cur_rx.execute('SELECT moteid, buffer_pos, crc, rssi, priority FROM pkt WHERE event="RX" AND type="DATA" AND asn="{0}" AND l2src="{1}"'.format(asn, l2src)):
+        if DEBUG:
+            print("   rx(anycast, {1}): {0}".format(rx, l2src))
+        moteid      = rx[0]
+        buffer_pos  = rx[1]
+        crc         = rx[2]
+        rssi        = rx[3]
+        priority    = rx[4]
+        
+        #if the packet has been received correctly, track the corresponding ack tx
+        ack_txed = 0
+        if (crc == 1):
+            cur_acktx = con.cursor()
+            cur_acktx.execute('SELECT moteid FROM pkt WHERE event="TX" AND type="ACK" AND asn="{0}" AND l2src="{1}"'.format(asn, rx[0]))
+            results = cur_acktx.fetchall()
+            
+            
+            
+            #an ack has been txed -> it will try to forward the packet
+            if (len(results) == 0):     # probably second receiver in anycast
+                ack_txed = 0
+            
+            elif (len(results) == 1):       #an ack has been txed
+                ack_txed = 1
+                 
+            elif DEBUG:
+                print("Hum, several acks from the same moteid? sounds strange....")
+                print(results)
+                print('SELECT moteid FROM pkt WHERE event="TX" AND type="ACK" AND asn="{0}" AND l2src="{1}"'.format(asn, rx[0]))
+        else:
+            print("BAD CRC, not POPPED")
+         
+        #insert this receiver for this hop
+        receivers.append({'moteid':moteid, 'crc':crc, 'rssi':rssi, 'buffer_pos':buffer_pos, 'priority':priority, 'ack_txed':ack_txed})
+        
+    return(receivers)
+            
+
+#list all the l2 transmissions for a given cexample packet
+def cex_packet_list_l2transmissions(con, moteid, buffer_pos, asn_gen):
+    cex_packet_l2tx = []
+
+    #list of motes (to be processed) which recived (and will forward) the packet
+    processingQueue = deque()
+    processingQueue.append({'l2src':moteid, 'buffer_pos':buffer_pos, 'asn_add':asn_gen})
+    
+    cur_queue = con.cursor()
+
+    # until the processing queue is empty (each hop that receives this packet is inserted in the FIFO)
+    while (len(processingQueue) > 0):
+        elem = processingQueue.popleft()
+         
+        if DEBUG:
+            print("")
+            print("POP: id={0}, asn={1}".format(elem['l2src'], elem['asn_add']))
+
+            
+        #ASN of deletion
+        #print('SELECT asn FROM queue WHERE moteid="{0}" AND asn>="{1}" AND event="DELETE" AND buffer_pos="{2}" ORDER BY asn ASC '.format(moteid, asn_add, buffer_pos))
+        cur_queue.execute('SELECT asn FROM queue WHERE moteid="{0}" AND asn>="{1}" AND event="DELETE" AND buffer_pos="{2}" ORDER BY asn ASC '.format(elem['l2src'], elem['asn_add'], elem['buffer_pos']))
+
+        #no result -> considers that it corresponds to an arbitrary large ASN
+        results = cur_queue.fetchall()
+        if (len(results) == 0):
+            asn_del = 99999999999999
+        else:
+            asn_del = results[0][0]
+        
+        if (DEBUG):
+            print("Deletion : {0}".format(asn_del))
+        
+        #for each TX and RETX in this two-ASN interval
+        cur_tx = con.cursor()
+        for tx in cur_tx.execute('SELECT asn, slotOffset, channelOffset, l2dest FROM pkt WHERE moteid="{0}" AND event="TX" AND type="DATA" AND buffer_pos="{1}" AND asn<="{2}" AND asn>="{3}" '.format(elem['l2src'], elem['buffer_pos'], asn_del, elem['asn_add'])):
+            asn = tx[0]
+            slotOffset =  tx[1]
+            channelOffset = tx[2]
+            l2dest = tx[3]
+            #print("txdata: src={1} & asn={0}".format(asn, elem['l2src']))
+
+            #an ack has been correctly received? (crc ok)
+            cur_rxack = con.cursor()
+            ack_rcvd = 0
+            cur_rxack.execute('SELECT moteid, buffer_pos FROM pkt WHERE event="RX" AND type="ACK" AND asn="{0}" AND crc="1" '.format(tx[0]))
+            results = cur_rxack.fetchall()
+            if (len(results) > 0):
+                ack_rcvd = 1
+
+            #list the l2 receivers for this l2 transmission
+            receivers = l2receivers_get(con, elem['l2src'], asn)
+            
+            #add the receivers to the processing list (if it sent an ack, it means it will forward the packet)
+            for rcvr in receivers:
+                if rcvr['ack_txed'] == 1:
+                    if (DEBUG):
+                        print("TO PROCESS: id={0}, asn={1}, buffer_pos={2}".format(rcvr['moteid'], asn, rcvr['buffer_pos']))
+                    processingQueue.append({'l2src':rcvr['moteid'], 'buffer_pos':rcvr['buffer_pos'], 'asn_add':asn})
+                    
+               
+            #we have listed everything for this hop
+            cex_packet_l2tx.append({'asn':tx[0], 'l2src':elem['l2src'], 'buffer_pos':buffer_pos, 'slotOffset':slotOffset, 'channelOffset':channelOffset, 'l2dest':l2dest, 'ack_rcvd':ack_rcvd,  'receivers':receivers })
+            if DEBUG:
+                print("")
+                print("")
+
+        #that's the end: all the transmission have been handled for this cexample packet
+        if DEBUG:
+            print("    {0}".format(cex_packet_l2tx))
+         
+        if DEBUG:
+            print("")
+            print("-----------")
+    return(cex_packet_l2tx)
+        
+
 
 #returns the list of cexample packets, and each corresponding l2 transmission
 def cex_packets_end2end(con):
     cex_packets = []
+    
 
     cur_cexample = con.cursor()
     for packet in cur_cexample.execute('SELECT DISTINCT moteid,seqnum,asn,buffer_pos FROM application WHERE component="CEXAMPLE"'):
@@ -88,10 +241,17 @@ def cex_packets_end2end(con):
         seqnum      = packet[1]
         asn_gen     = packet[2]
         buffer_pos  = packet[3]
-        cex_packet = ({'cex_src': moteid, 'seqnum':seqnum, 'asn':asn_gen, 'l2_transmissions':[] })
+        cex_packet = ({'cex_src': moteid, 'seqnum':seqnum, 'asn':asn_gen})
         
-        print("")
-        print("-------   {0} seqnum={1} --------".format(moteid, seqnum))
+        global DEBUG
+        if moteid == '054332ff03dbb179':
+            DEBUG = True
+        else:
+            DEBUG = False
+        
+        if DEBUG:
+            print("")
+            print("-------   {0} seqnum={1} --------".format(moteid, seqnum))
  
         #be carefull -> cexample allocates one packet, and UDP allocates another one (distinct)
         #thus, selects the UDP packet generated by the same moteid, with the same ASN (we would be unlucky if we have collisions -- i.e., several CoAP/UDP applications in parallel)
@@ -99,111 +259,16 @@ def cex_packets_end2end(con):
         cur_udp.execute('SELECT buffer_pos FROM application WHERE moteid="{0}" AND asn="{1}" AND component="SOCK_TO_UDP"'.format(moteid, asn_gen))
         results = cur_udp.fetchall()
         if (len(results) != 1):
-            print("Hum, we have too many (or zero) possible responses for this packet (id {0}, asn={1}, pos={2}):".format(moteid, asn_gen, buffer_pos))
+            print("Hum, we have too many (or zero) possible responses (={3}) for this packet (id {0}, asn={1}, pos={2}):".format(moteid, asn_gen, buffer_pos, len(results)))
             for row in results:
                 print(row)
         else:
             buffer_pos = results[0][0]
-         
-         
-                    
-        #list of motes that received a cexample packet and forward it
-        processingQueue = deque()
-        processingQueue.append({'l2src':moteid, 'buffer_pos':buffer_pos, 'asn_add':asn_gen})
-  
-        
+    
         #for each hop, track the corresponding txed packets
-        asn_add = asn_gen
-        cur_queue = con.cursor()
+        cex_packet['l2_transmissions'] = cex_packet_list_l2transmissions(con, moteid, buffer_pos, asn_gen)
+        cex_packets.append(cex_packet)
         
-        # until the processing queue is empty (each hop that receives this packet is inserted in the FIFO)
-        while (len(processingQueue) > 0):
-            elem = processingQueue.popleft()
-            
-            
-            
-            print("")
-            print("POP: id={0}, asn={1}".format(elem['l2src'], elem['asn_add']))
-
-                
-            #ASN of deletion
-            #print('SELECT asn FROM queue WHERE moteid="{0}" AND asn>="{1}" AND event="DELETE" AND buffer_pos="{2}" ORDER BY asn ASC '.format(moteid, asn_add, buffer_pos))
-            cur_queue.execute('SELECT asn FROM queue WHERE moteid="{0}" AND asn>="{1}" AND event="DELETE" AND buffer_pos="{2}" ORDER BY asn ASC '.format(elem['l2src'], elem['asn_add'], elem['buffer_pos']))
-
-            #no result -> considers that it corresponds to an arbitrary large ASN
-            results = cur_queue.fetchall()
-            if (len(results) == 0):
-                asn_del = 99999999999999
-            else:
-                asn_del = results[0][0]
-           
-            
-            
-            #for each TX and RETX in this two-ASN interval
-            cur_tx = con.cursor()
-            for tx in cur_tx.execute('SELECT asn, slotOffset, channelOffset, l2dest FROM pkt WHERE moteid="{0}" AND event="TX" AND type="DATA" AND buffer_pos="{1}" AND asn<="{2}" AND asn>="{3}" '.format(elem['l2src'], elem['buffer_pos'], asn_del, elem['asn_add'])):
-                asn = tx[0]
-                slotOffset =  tx[1]
-                channelOffset = tx[2]
-                l2dest = tx[3]
-                #print("txdata: src={1} & asn={0}".format(asn, elem['l2src']))
-
-                #an ack has been correctly received? (crc ok)
-                cur_rxack = con.cursor()
-                ack_rcvd = 0
-                cur_rxack.execute('SELECT moteid, buffer_pos FROM pkt WHERE event="RX" AND type="ACK" AND asn="{0}" AND crc="1" '.format(tx[0]))
-                results = cur_rxack.fetchall()
-                if (len(results) > 0):
-                    ack_rcvd = 1
- 
-                #for each receiver
-                receivers = []
-                cur_rx = con.cursor()
-                for rx in cur_rx.execute('SELECT moteid, buffer_pos, crc, rssi, priority FROM pkt WHERE event="RX" AND type="DATA" AND asn="{0}" AND l2src="{1}"'.format(asn, elem['l2src'])):
-                    print("   rx(anycast, {1}): {0}".format(rx, l2dest))
-                    moteid      = rx[0]
-                    buffer_pos  = rx[1]
-                    crc         = rx[2]
-                    rssi        = rx[3]
-                    priority    = rx[4]
-                    
-                    #if the packet has been received correctly, track the corresponding ack tx
-                    ack_txed = 0
-                    if (crc == 1):
-                        cur_acktx = con.cursor()
-                        cur_acktx.execute('SELECT moteid FROM pkt WHERE event="TX" AND type="ACK" AND asn="{0}" AND l2src="{1}"'.format(asn, rx[0]))
-                        results = cur_acktx.fetchall()
-                        
-                        #an ack has been txed -> it will try to forward the packet
-                        if (len(results) > 0):
-                            print("POPPED: rcvr {0}".format(moteid))
-                        
-                            ack_txed = 1
-                            processingQueue.append({'l2src':moteid, 'buffer_pos':buffer_pos, 'asn_add':asn})
-                            
-                        else:
-                            print("NOT ACKED WHILE GOOD CRC, not POPPED")
-                    else:
-                        print("BAD CRC, not POPPED")
-                     
-                    #insert this receiver for this hop
-                    receivers.append({'moteid':moteid, 'crc':crc, 'rssi':rssi, 'buffer_pos':buffer_pos, 'priority':priority, 'ack_txed':ack_txed})
-                                                
-                    
-                #we have now handled this TX
-                cex_packet['l2_transmissions'].append({'asn':tx[0], 'l2src':elem['l2src'], 'buffer_pos':buffer_pos, 'slotOffset':slotOffset, 'channelOffset':channelOffset, 'l2dest':l2dest, 'ack_rcvd':ack_rcvd,  'receivers':receivers })
-                
-                print("")
-                print("")
-
-            #that's the end: all the transmission have been handled for this cexample packet
-            print("    {0}".format(cex_packet))
-            cex_packets.append(cex_packet)
-            
-            print("")
-            print("-----------")
-        #next cexample packet will be processed at the beginning of the while
-       
        
     return(cex_packets)
         
@@ -218,25 +283,89 @@ con = init()
 print("----- Motes -----")
 motes = motes_get(con)
 print(motes)
+dagroot_ids = dagroot_ids_get(con)
+print("dagroots = {0}".format(dagroot_ids))
+asn_end = asn_end_get(con)
+print("ASN max = {0}".format(asn_end))
 
-#anycast links
-print("------ Links -----")
+#anycast/unicast links
+print("------ Links / Cells -----")
 links = links_get(con)
 for link in links:
     print(link)
 
 #track tx for each app packet
-print("------ Packets -----")
+print("------ Cexample Packets -----")
 cex_packets = cex_packets_end2end(con)
+
+
+
+if False:
+    for cex_packet in cex_packets:
+        print(cex_packet)
+    
+        print("src={0}, seqnum={1}".format(cex_packet['cex_src'], cex_packet['seqnum']))
+        for elem in cex_packet['l2_transmissions']:
+            print("        {0}".format(cex_packet['l2_transmissions']))
+        print("------")
+
+
+#track tx for each app packet
+print("------ Statistics -----")
+
+#PDR per source
+PDR = {}
 for cex_packet in cex_packets:
-    print("src={0}, seqnum={1}".format(cex_packet['src'], cex_packet['asn']))
-    for elem in cex_packet['l2_transmissions']:
-        print("        {0}".format(cex_packet['l2_transmissions']))
-    print("------")
+    
+    #don't handle the packets that have been generated too late (may not be delivered to the sink)
+    if cex_packet['asn'] >= asn_end - 500 :
+        break
+
+    #creates the key for this src device if it doesn't exist yet
+    if cex_packet['cex_src'] in PDR:
+        PDR[cex_packet['cex_src']]['nb_gen'] = PDR[cex_packet['cex_src']]['nb_gen'] + 1
+    else:
+        PDR[cex_packet['cex_src']] = {}
+        PDR[cex_packet['cex_src']]['nb_gen'] = 1
+        PDR[cex_packet['cex_src']]['nb_rcvd'] = 1
+
+    
+    try:
+        for l2tx in cex_packet['l2_transmissions']:
+            for rcvr in l2tx['receivers']:
+                if rcvr['moteid'] in dagroot_ids :
+                    PDR[cex_packet['cex_src']]['nb_rcvd'] = PDR[cex_packet['cex_src']]['nb_rcvd'] +1
+                    raise(rxFound)
+    #we found one of the dagroot ids -> pass to the next cex packet
+    except rxFound as evt:
+        pass
+        
+print("PDR = {0}".format(PDR))
 
 
+print("")
+print("")
+print("")
+print("")
+print("")
+print("")
+
+#debug for one source
+if False:
+    for cex_packet in cex_packets:
+        if cex_packet['cex_src'] == '054332ff03dbb179' :
+            print("")
+            print("seqnum {0}".format(cex_packet['seqnum']))
+            print("")
+
+            for l2tx in cex_packet['l2_transmissions']:
+                print(l2tx)
+
+            print("")
+            print("")
 
 
+print(dagroot_ids)
 
 #end
 con.close()
