@@ -391,10 +391,11 @@ if __name__ == "__main__":
       
     print("Per cexample packet")
     for value in stats:
-        print("{0}: PDR={1}% / delay={2}slots / nbl2tx={3} / stats={4}".format(
+        print("{0}: PDR={1}% / delay={2}slots / nbl2tx_eff={3} / nbl2tx_raw={4} / stats={5}".format(
         value,
         100 * stats[value]['nb_rcvd'] / stats[value]['nb_gen'] ,
         stats[value]['delay'] / stats[value]['nb_rcvd'],
+        stats[value]['nb_l2tx'] / stats[value]['nb_rcvd'],
         stats[value]['nb_l2tx'] / stats[value]['nb_gen'],
         stats[value]
         ))
