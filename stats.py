@@ -359,7 +359,7 @@ if __name__ == "__main__":
     print("------ Statistics -----")
 
     #PDR per source
-    PDR = {}
+    stats = {}
     for cex_packet in cex_packets:
         
         #don't handle the packets that have been generated too late (may not be delivered to the sink)
@@ -367,26 +367,41 @@ if __name__ == "__main__":
        #     break
 
         #creates the key for this src device if it doesn't exist yet
-        if cex_packet['cex_src'] in PDR:
-            PDR[cex_packet['cex_src']]['nb_gen'] = PDR[cex_packet['cex_src']]['nb_gen'] + 1
+        if cex_packet['cex_src'] in stats:
+            stats[cex_packet['cex_src']]['nb_gen'] = stats[cex_packet['cex_src']]['nb_gen'] + 1
         else:
-            PDR[cex_packet['cex_src']] = {}
-            PDR[cex_packet['cex_src']]['nb_gen'] = 1
-            PDR[cex_packet['cex_src']]['nb_rcvd'] = 0
+            stats[cex_packet['cex_src']] = {}
+            stats[cex_packet['cex_src']]['nb_gen'] = 1
+            stats[cex_packet['cex_src']]['nb_rcvd'] = 0
+            stats[cex_packet['cex_src']]['delay'] = 0
+            stats[cex_packet['cex_src']]['nb_l2tx'] = 0
 
         
         try:
+            stats[cex_packet['cex_src']]['nb_l2tx'] += len(cex_packet['l2_transmissions'])
             for l2tx in cex_packet['l2_transmissions']:
                 for rcvr in l2tx['receivers']:
                     if rcvr['moteid'] in dagroot_ids :
-                        PDR[cex_packet['cex_src']]['nb_rcvd'] = PDR[cex_packet['cex_src']]['nb_rcvd'] +1
+                        stats[cex_packet['cex_src']]['nb_rcvd'] += 1 #stats[cex_packet['cex_src']]['nb_rcvd'] +1
+                        stats[cex_packet['cex_src']]['delay'] += l2tx['asn'] - cex_packet['asn']
                         raise(rxFound)
         #we found one of the dagroot ids -> pass to the next cex packet
         except rxFound as evt:
             pass
       
-    for value in PDR:
-        print("{0}: {1}% / {2}".format(value, 100 * PDR[value]['nb_rcvd'] / PDR[value]['nb_gen'] , PDR[value]))
+    print("Per cexample packet")
+    for value in stats:
+        print("{0}: PDR={1}% / delay={2}slots / nbl2tx={3} / stats={4}".format(
+        value,
+        100 * stats[value]['nb_rcvd'] / stats[value]['nb_gen'] ,
+        stats[value]['delay'] / stats[value]['nb_rcvd'],
+        stats[value]['nb_l2tx'] / stats[value]['nb_gen'],
+        stats[value]
+        ))
+
+    print("")
+    print("")
+
 
 
     #debug for one source
@@ -403,7 +418,8 @@ if __name__ == "__main__":
                 print("")
                 print("")
 
-
+    print("------ Configuration -----")
+    
     print("dagroots: {0}".format(dagroot_ids))
 
     #end
