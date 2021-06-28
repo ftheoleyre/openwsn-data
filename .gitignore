@@ -135,3 +135,6 @@ openwsn-data.xcodeproj/
 results/
 openv_events.db
 openv_events-short.db
+figs/delay.pdf
+figs/nb_l2tx.pdf
+figs/pdr.pdf
