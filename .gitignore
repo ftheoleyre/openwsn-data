@@ -138,3 +138,7 @@ openv_events-short.db
 figs/delay.pdf
 figs/nb_l2tx.pdf
 figs/pdr.pdf
+figs/cexample_delay.pdf
+figs/cexample_nb_l2tx.pdf
+figs/cexample_pdr.pdf
+figs/l2tx_pdr_bidirect.pdf

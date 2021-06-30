@@ -80,7 +80,7 @@ def dagroot_ids_get(con):
 def configuration_get(con):
     config = {}
     cur = con.cursor()
-    for row in cur.execute('SELECT DISTINCT sixtop_anycast, sixtop_lowest, msf_numcells, msf_maxcells, msf_mincells, neigh_maxrssi, neigh_minrssi  FROM config'):
+    for row in cur.execute('SELECT DISTINCT sixtop_anycast, sixtop_lowest, msf_numcells, msf_maxcells, msf_mincells, neigh_maxrssi, neigh_minrssi, cexample_period  FROM config'):
         
         config['sixtop_anycast'] = row[0]
         config['sixtop_lowest'] = row[1]
@@ -89,6 +89,7 @@ def configuration_get(con):
         config['msf_mincells'] = row[4]
         config['neigh_maxrssi'] = row[5]
         config['neigh_minrssi'] = row[6]
+        config['cexample_period'] = row[7]
 
         return(config)
     return(None)
@@ -106,7 +107,7 @@ def asn_end_get(con):
 
 
 
-#returns the list of links (anycast = yes / no
+#returns the list of links (anycast = yes / no) + the tx/rx
 def links_get(con):
     links = []
     cur = con.cursor()
@@ -115,19 +116,62 @@ def links_get(con):
         #search for the correspond DEL asn
         cur2 = con.cursor()
         asn_end = None
+       
         
-  
-            
+        
         for row2 in cur2.execute('SELECT asn  FROM schedule WHERE type="TX" AND shared="0" AND event="DEL" AND moteid="{0}" AND neighbor="{1}" AND slotOffset="{2}" '.format(row[0], row[1], row[5])):
              
             #keep the smallest ASN larger than the start_asn
             if row2[0] > row[4] and ( asn_end is None or row2[0] < asn_end):
                 asn_end = row2[0]
-
-        links.append({'src':row[0], 'neigh':row[1], 'neigh2':row[2], 'anycast':row[3], 'slot':row[5], 'channel':row[6], 'start':row[4], 'end':asn_end })
+            
+        links.append({'src':row[0], 'neigh':row[1], 'neigh2':row[2], 'anycast':row[3], 'slot':row[5], 'channel':row[6], 'start':row[4], 'end':asn_end})
+        
     return(links)
 
 
+#all l2 data tx
+def l2tx_get(con):
+    l2tx = []
+    
+    cur = con.cursor()
+
+    sql_request = 'SELECT dataTX.asn, dataTX.moteid, dataTX.l2dest, dataTX.slotOffset, dataTX.channelOffset, dataTX.shared, dataTX.autoCell, \
+    dataRX.moteid, dataRX.priority, dataRX.crc, \
+    ackTX.moteid, \
+    ackRX.crc\
+    FROM pkt AS dataTX\
+    LEFT JOIN(\
+        SELECT *\
+        FROM pkt\
+        WHERE type="DATA" AND event="RX"\
+    ) dataRX\
+    ON dataTX.moteid=dataRX.l2src AND dataTX.asn=dataRX.asn\
+    LEFT JOIN (\
+        SELECT *\
+        FROM pkt \
+        WHERE type="ACK" AND event="TX"\
+    ) ackTX\
+    ON ackTX.moteid = dataRX.moteid AND ackTX.asn=dataRX.asn\
+    LEFT JOIN(\
+        SELECT *\
+        FROM pkt \
+        WHERE type="ACK" AND event="RX"\
+    ) ackRX\
+    ON ackTX.moteid = ackRX.l2src AND ackTX.asn=ackRX.asn\
+    WHERE dataTX.type="DATA" AND dataTX.event="TX"'
+    
+    print(sql_request)
+    for row in cur.execute(sql_request):
+        
+        
+        
+        l2tx.append({'asn': row[0], 'moteid_tx':row[1], 'moteid_dest':row[2], 'slotOffset':row[3], 'channelOffset':row[4], 'shared':row[5], 'autoCell':row[6], 'moteid_rx':row[7],  'priority_rx':row[8], 'crc_data':row[9], 'ack_tx':(row[10] is not None), 'crc_ack':row[11]})
+    
+    return(l2tx)
+        
+
+            
 ##returns the list of receivers for this l2 transmission
 def cex_l2receivers_get(con, l2src, asn):
 
@@ -352,6 +396,7 @@ if __name__ == "__main__":
             links = links_get(con)
             for link in links:
                 print(link)
+            l2tx = l2tx_get(con)
 
             #track tx for each app packet
             print("")
@@ -375,12 +420,13 @@ if __name__ == "__main__":
             data['motes']           = motes
             data['links']           = links
             data['cex_packets']     = cex_packets
+            data['l2tx']            = l2tx
             data['dagroot_ids']     = dagroot_ids
             data['asn_end']         = asn_end
             data['configuration']   = configuration_get(con)
             data['configuration']['nbmotes'] =  len(motes)
             
-            json_file = os.path.join(directory, experiment, "stats.json")
+            json_file = os.path.join(directory, experiment, "cexample.json")
             with open(json_file, 'w') as outfile:
                 json.dump(data, outfile)
                 
