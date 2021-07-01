@@ -164,7 +164,7 @@ def cexample_plot(flowStats):
     plot = sns.violinplot(x='nbmotes', y='pdr', hue='sixtop_anycast',cut=0, data=flowStats_pd)
     plot.set_xlabel("Number of motes")
     plot.set_ylabel("Packet Delivery Ratio")
-    plot.figure.savefig("figs/cexample_pdr.pdf")
+    plot.figure.savefig("plots/cexample_pdr.pdf")
     plot.set_xticks(np.arange(50, 100, 10))
     plot.figure.clf()
     
@@ -172,14 +172,14 @@ def cexample_plot(flowStats):
     plot = sns.violinplot(x='nbmotes', y='delay_ms', hue='sixtop_anycast',data=flowStats_pd)
     plot.set_xlabel("Number of motes")
     plot.set_ylabel("Delay (in ms)")
-    plot.figure.savefig("figs/cexample_delay.pdf")
+    plot.figure.savefig("plots/cexample_delay.pdf")
     plot.figure.clf()
         
     #Efficiency
     plot = sns.violinplot(x='nbmotes', y='nb_l2tx_raw', hue='sixtop_anycast',data=flowStats_pd)
     plot.set_xlabel("Number of motes")
     plot.set_ylabel("Number of transmissions per message")
-    plot.figure.savefig("figs/cexample_nb_l2tx.pdf")
+    plot.figure.savefig("plots/cexample_nb_l2tx.pdf")
     plot.figure.clf()
    
     print("")
@@ -265,7 +265,7 @@ def l2tx_plot(l2txStats):
     plot = sns.scatterplot(x='PDRData', y='PDRAck', data=l2txStats_pd)
     plot.set_xlabel("Packet Delivery Ratio (data)")
     plot.set_ylabel("Packet Delivery Ratio (ack)")
-    plot.figure.savefig("figs/l2tx_pdr_bidirect.pdf")
+    plot.figure.savefig("plots/l2tx_pdr_bidirect.pdf")
     plot.figure.clf()
     
   
