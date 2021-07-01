@@ -169,14 +169,14 @@ def cexample_plot(flowStats):
     plot.figure.clf()
     
     #PDR
-    plot = sns.violinplot(x='nbmotes', y='delay_ms', hue='sixtop_anycast',data=flowStats_pd)
+    plot = sns.violinplot(x='nbmotes', y='delay_ms', hue='sixtop_anycast',cut=0,data=flowStats_pd)
     plot.set_xlabel("Number of motes")
     plot.set_ylabel("Delay (in ms)")
     plot.figure.savefig("plots/cexample_delay.pdf")
     plot.figure.clf()
         
     #Efficiency
-    plot = sns.violinplot(x='nbmotes', y='nb_l2tx_raw', hue='sixtop_anycast',data=flowStats_pd)
+    plot = sns.violinplot(x='nbmotes', y='nb_l2tx_raw', hue='sixtop_anycast',cut=0,data=flowStats_pd)
     plot.set_xlabel("Number of motes")
     plot.set_ylabel("Number of transmissions per message")
     plot.figure.savefig("plots/cexample_nb_l2tx.pdf")

@@ -51,9 +51,19 @@ def init():
     parser.add_argument('--dir',
                         default="./results",
                         help='directory to parse (one directory per experiment)')
+
+    parser.add_argument('--rewrite', dest='rewrite', action='store_true',
+                            help='rewrite the stats even if a json file exists in a subdirectory')
+    parser.add_argument('--no-rewrite', dest='rewrite', action='store_false',
+                            help='keep the stats if a json file exists in a subdirectory')
+    parser.set_defaults(rewrite=False)
+
     args = parser.parse_args()
-    print("DIR:{0}".format(args.dir))
-    return(args.dir)
+    print("DIR:{}".format(args.dir))
+    print("REWRITE:{}".format(args.rewrite))
+   
+    
+    return(args)
 
 
 #multithreading is here safe because we NEVER modify the db, we just read it
@@ -163,7 +173,7 @@ def l2tx_get(con):
     ON ackTX.moteid = ackRX.l2src AND ackTX.asn=ackRX.asn\
     WHERE dataTX.type="DATA" AND dataTX.event="TX"'
     
-    print(sql_request)
+    #print(sql_request)
     for row in cur.execute(sql_request):
         
         l2tx.append({'asn': row[0], 'moteid_tx':row[1], 'moteid_dest':row[2], 'slotOffset':row[3], 'channelOffset':row[4], 'shared':row[5], 'autoCell':row[6], 'tx_buffer_pos':row[7], 'moteid_rx':row[8],  'priority_rx':row[9], 'crc_data':row[10], 'rssi':row[11], 'rx_buffer_pos':row[12], 'ack_tx':(row[13] is not None), 'crc_ack':row[14]})
@@ -313,17 +323,14 @@ def cex_l2transmissions_for_cex_packet_bis(con, moteid, buffer_pos, asn_gen, l2t
     l2tx_list = []
     cur_queue = con.cursor()
 
-    
-    #start our exploration
-    hop_next = {'l2src':moteid, 'buffer_pos':buffer_pos, 'asn_add':asn_gen}
-
+    #list of motes (to be processed) which recived (and will forward) the packet
+    processingQueue = deque()
+    processingQueue.append({'l2src':moteid, 'buffer_pos':buffer_pos, 'asn_add':asn_gen})
+  
     # do until there is no hop to explore
-    while hop_next is not None:
-    
-        #swap current and next
-        hop_current = hop_next
-        hop_next = None
-    
+    try:
+        hop_current = processingQueue.popleft()
+
         #ASN of deletion
         #print('SELECT asn FROM queue WHERE moteid="{0}" AND asn>="{1}" AND event="DELETE" AND buffer_pos="{2}" ORDER BY asn ASC '.format(moteid, asn_add, buffer_pos))
         cur_queue.execute('SELECT asn FROM queue WHERE moteid="{0}" AND asn>="{1}" AND event="DELETE" AND buffer_pos="{2}" ORDER BY asn ASC '.format(hop_current['l2src'], hop_current['asn_add'], hop_current['buffer_pos']))
@@ -347,7 +354,7 @@ def cex_l2transmissions_for_cex_packet_bis(con, moteid, buffer_pos, asn_gen, l2t
         #group by asn (make a distinction between the different retx
         list_pd = list_pd.groupby('asn')
 
-        #a specific timeslot
+        #for each specific timeslot
         for df_name, df_group in list_pd:
             #print("ASN: {}".format(df_name))
             #print("first entry : {}".format(df_group.iloc[0]))
@@ -363,7 +370,7 @@ def cex_l2transmissions_for_cex_packet_bis(con, moteid, buffer_pos, asn_gen, l2t
                 if row['moteid_rx'] is not None:
                     #did it tx an ack ?
                     if row['ack_tx']:
-                        hop_next = {'l2src':row['moteid_rx'], 'buffer_pos':row['rx_buffer_pos'], 'asn_add':row['asn']}
+                        processingQueue.append({'l2src':row['moteid_rx'], 'buffer_pos':row['rx_buffer_pos'], 'asn_add':row['asn']})
                         
                     #did the tx receive the ack?
                     if row['crc_ack']:
@@ -378,8 +385,6 @@ def cex_l2transmissions_for_cex_packet_bis(con, moteid, buffer_pos, asn_gen, l2t
                     'ack_txed':row['ack_tx']
                     })
                     
-                   
-                    
             #we have listed everything for this hop
             l2tx_list.append({
             'asn':int(df_name),
@@ -391,7 +396,12 @@ def cex_l2transmissions_for_cex_packet_bis(con, moteid, buffer_pos, asn_gen, l2t
             'ack_rcvd':ack_rcvd,
             'receivers':receivers
             })
-            
+    #the queue is empty
+    except IndexError:
+        pass
+    except Exception as e:
+        print(e)
+        
             
         
     
@@ -445,54 +455,59 @@ def cex_packets_end2end(con, l2tx_pd):
 if __name__ == "__main__":
 
     #parameters
-    directory = init()
+    args = init()
 
   
-    for experiment in os.listdir(directory):
-        db_filename = os.path.join(directory, experiment, "openv_events.db")
+    for experiment in os.listdir(args.dir):
+        db_filename = os.path.join(args.dir, experiment, "openv_events.db")
+        json_filename = os.path.join(args.dir, experiment, "stats.json")
+            
+        #a db exists, and has not been processed
+        to_process = (os.path.isfile(json_filename) is False) or (args.rewrite)
         
-        if os.path.isfile(db_filename) is True:
-            print(db_filename)
+        print("------------------------------------------------------------------------------------------------")
+        print("SUBDIR |{}| => db={}, json_exists={}, rewrite={}  ".format(
+                os.path.join(args.dir, experiment),
+                os.path.isfile(db_filename),
+                os.path.isfile(json_filename),
+                args.rewrite
+        ))
+        
+        
+        if (to_process) and (os.path.isfile(db_filename) is True):
+            print("")
             
             #parameters, etc.
             con = db_create_connection(db_filename)
 
-            #extracts preliminary info
-            print("")
-            print("----- Motes -----")
+            # ---- MOTES & CONFIG ----
             motes = motes_get(con)
-            print(motes)
+            print("Nb. Motes={} ".format(len(motes)))
             dagroot_ids = dagroot_ids_get(con)
-            print("dagroots = {0}".format(dagroot_ids))
             asn_end = asn_end_get(con)
-            print("ASN max = {0}".format(asn_end))
-
-            #anycast/unicast links
-            print("")
-            print("------ Links / Cells -----")
-            links = links_get(con)
-            for link in links:
-                print(link)
-            l2tx = l2tx_get(con)
+            print("Duration={}min".format(asn_end * 25 / 60000))
             
+            #--- RAW layer 2 transmisisons ------
+            #anycast/unicast links
+            links = links_get(con)
+            l2tx = l2tx_get(con)
+            print("Nb. l2tx={} ".format(len(l2tx)))
+
              
-            #track tx for each app packet
-            print("")
-            print("------ Cexample Packets -----")
-            print("")
-            print("")
+            #  ----- CEXAMPLE ----- track tx for each app packet
             l2tx_pd = pd.DataFrame.from_dict(l2tx)
             cex_packets = cex_packets_end2end(con, l2tx_pd)
 
+            print("Nb. Cexample packets={}".format(len(cex_packets)))
 
             if False:
                 for cex_packet in cex_packets:
                     print(cex_packet)
                 
-                    print("src={0}, seqnum={1}".format(cex_packet['cex_src'], cex_packet['seqnum']))
-                    for elem in cex_packet['l2_transmissions']:
-                        print("        {0}".format(cex_packet['l2_transmissions']))
-                    print("------")
+                    #print("src={0}, seqnum={1}".format(cex_packet['cex_src'], cex_packet['seqnum']))
+                    #for elem in cex_packet['l2_transmissions']:
+                    #    print("        {0}".format(cex_packet['l2_transmissions']))
+                    #print("------")
         
             #store everything in json file
             data = {}
@@ -503,15 +518,14 @@ if __name__ == "__main__":
             data['dagroot_ids']     = dagroot_ids
             data['asn_end']         = asn_end
             data['configuration']   = configuration_get(con)
-            data['configuration']['nbmotes'] =  len(motes)
+            data['configuration']['nbmotes'] = len(motes)
+            data['configuration']['experiment'] = experiment
             
-            json_file = os.path.join(directory, experiment, "cexample.json")
-            with open(json_file, 'w') as outfile:
+            with open(json_filename, 'w') as outfile:
                 json.dump(data, outfile)
                 
                 
             #end for this experiment
-            print("End for experiment {0}".format(experiment))
             con.close()
             
             
