@@ -30,18 +30,16 @@ import numpy as np
 #FIFO
 from collections import deque
 
-
 #plot
 import pandas as pd
-import seaborn as sns
 from IPython.display import display
 
 
 
-PARAM_MIN_TX = 70       #discard all the stats where less than X packets have been generated
-PARAM_MIN_ACKTX = 40    # disard flows with not enough ack txed
-PARAM_ASN_MARGIN_START = 1000  # discard the last X timeslots (25ms)
-PARAM_ASN_MARGIN_END = 500     # discard the first X timeslots (25ms)
+PARAM_MIN_TX = 70               #discard all the stats where less than X packets have been generated
+PARAM_MIN_ACKTX = 2             # disard flows with not enough ack txed (typically unused secondary receivers
+PARAM_ASN_MARGIN_START = 1000   # discard the last X timeslots (25ms)
+PARAM_ASN_MARGIN_END = 500      # discard the first X timeslots (25ms)
 
 
 class rxFound(Exception):
@@ -51,22 +49,98 @@ class rxFound(Exception):
     pass
     
     
-
-#initialization: args + sqlite connection
-def init():
-    #parsing arguments
-    parser = argparse.ArgumentParser(description='plot graphs with the data processed in a json file.')
-
-    parser.add_argument('--dir',
-                        default="./results",
-                        help='directory to parse (one directory per experiment)')
-    args = parser.parse_args()
-    print("DIR:{0}".format(args.dir))
-    return(args.dir)
-
-    
 #extracts and classifies cexample info
-def cexample_compute(datafile, flowStats):
+def cexample_compute_indiv(experiment, datafile, flowStats):
+    
+    #init if the variable doesn't exist
+    if flowStats is None:
+        #stats for cexample flows (dictionary to be used later by pandas)
+        flowStats = {}
+        flowStats['cex_src'] = []
+        flowStats['seqnum'] = []
+        flowStats['asn_gen'] = []
+        flowStats['delivered'] = []
+        flowStats['delay_ts'] = []
+        flowStats['delay_ms'] = []
+        flowStats['nb_l2tx'] = []
+        flowStats['nbmotes'] = []
+        flowStats['cexample_period'] = []
+        flowStats['sixtop_anycast'] = []
+
+        
+    #track tx for each app packet
+    print("")
+    print("------ Statistics -- {0} -----".format(experiment))
+
+    #PDR per source
+    stats = {}
+    
+    #display(datafile['cex_packets'][0])
+    #print("dagroots: {}".format(datafile['dagroot_ids']))
+    
+    for cex_packet in datafile['cex_packets']:
+        
+        #don't handle the packets that have been generated too late or too early
+        if cex_packet['asn'] < PARAM_ASN_MARGIN_START or cex_packet['asn'] > datafile['asn_end'] - PARAM_ASN_MARGIN_END :
+            break
+        
+        #search for the hop that received the packet
+        #print("----{} ---".format(len(cex_packet['l2_transmissions'])))
+
+        delay_ts = 0
+        is_rcvd = False
+        for l2tx in cex_packet['l2_transmissions']:
+            #print(l2tx)
+            for rx in l2tx['receivers']:
+                #print("  --> {}".format(rx['moteid']))
+                if rx['moteid'] in datafile['dagroot_ids']:
+                    is_rcvd = True
+                    delay_ts = l2tx['asn'] - cex_packet['asn']
+        #print("-----")
+        #print("{} {}".format(is_rcvd, delay_ts))
+
+        
+        flowStats['cex_src'].append(cex_packet['cex_src'])
+        flowStats['seqnum'].append(cex_packet['seqnum'])
+        flowStats['asn_gen'].append(cex_packet['asn'])
+        flowStats['delivered'].append(is_rcvd)
+        flowStats['delay_ts'].append(delay_ts)
+        flowStats['delay_ms'].append(delay_ts * 25)
+        flowStats['nb_l2tx'].append(len(cex_packet['l2_transmissions']))
+        flowStats['nbmotes'].append(datafile['configuration']['nbmotes'])
+        flowStats['cexample_period'].append(datafile['configuration']['cexample_period'])
+        flowStats['sixtop_anycast'].append(datafile['configuration']['sixtop_anycast'])
+
+        
+        
+    #display(flowStats)
+    return flowStats
+            
+                    
+            
+
+
+
+
+
+
+#extracts and classifies cexample info
+def cexample_compute_agg(experiment, datafile, flowStats):
+    
+    #init if the variable doesn't exist
+    if flowStats is None:
+        #stats for cexample flows (dictionary to be used later by pandas)
+        flowStats = {}
+        flowStats['cex_src'] = []
+        flowStats['nbmotes'] = []
+        flowStats['cexample_period'] = []
+        flowStats['sixtop_anycast'] = []
+        flowStats['pdr'] = []
+        flowStats['delay_ts'] = []
+        flowStats['delay_ms'] = []
+        flowStats['nb_l2tx_raw'] = []
+        flowStats['nb_l2tx_norm'] = []
+
         
     #track tx for each app packet
     print("")
@@ -143,58 +217,40 @@ def cexample_compute(datafile, flowStats):
                 flowStats['delay_ts'].append(0)
                 flowStats['delay_ms'].append(0)
                 flowStats['nb_l2tx_norm'].append(0)
-
+    return flowStats
             
                     
-                    
-#plot the figures for cexample stats
-def cexample_plot(flowStats):
-    
-    #Panda values (separating anycast and unicast)
-    print("-- Cexample flows")
-    flowStats_pd = pd.DataFrame.from_dict(flowStats)
-    flowStats_pd = flowStats_pd[flowStats_pd['nbmotes'] < 20].reset_index()
-    
-    #common sns config
-    sns.set_theme(style="ticks")
-
-    #PDR
-    plot = sns.violinplot(x='nbmotes', y='pdr', hue='sixtop_anycast',cut=0, legend_out=True, data=flowStats_pd)
-    plot.legend(handles=plot.legend_.legendHandles, labels=['without anycast', 'with anycast'])
-    plot.set_xlabel("Number of motes")
-    plot.set_ylabel("Packet Delivery Ratio")
-    #plot.set(yscale="log")
-    #plot.set(ylim=(1e-2,1))
-    plot.set(ylim=(0,1))
-    plot.figure.savefig("plots/cexample_pdr.pdf")
-    plot.set_xticks(np.arange(50, 100, 10))
-    plot.figure.clf()
-    
-    #PDR
-    plot = sns.violinplot(x='nbmotes', y='delay_ms', hue='sixtop_anycast',cut=0,data=flowStats_pd)
-    plot.legend(handles=plot.legend_.legendHandles, labels=['without anycast', 'with anycast'])
-    plot.set_xlabel("Number of motes")
-    plot.set_ylabel("Delay (in ms)")
-    plot.figure.savefig("plots/cexample_delay.pdf")
-    plot.figure.clf()
-        
-    #Efficiency
-    plot = sns.violinplot(x='nbmotes', y='nb_l2tx_raw', hue='sixtop_anycast',cut=0,data=flowStats_pd)
-    plot.legend(handles=plot.legend_.legendHandles, labels=['without anycast', 'with anycast'])
-    plot.set_xlabel("Number of motes")
-    plot.set_ylabel("Number of transmissions per message")
-    plot.figure.savefig("plots/cexample_nb_l2tx.pdf")
-    plot.figure.clf()
-   
-    print("")
-    print("")
-    
+            
 
 
 
 #raw layer 2 transmissions
 def l2tx_compute(datafile, l2txStats):
+   
+    #init if the variable doesn't exist
+    if l2txStats is None:
+    #stats for l2 frame transmsisions
+        l2txStats = {}
+        l2txStats['nbmotes'] = []
+        l2txStats['cexample_period'] = []
+        l2txStats['sixtop_anycast'] = []
+        l2txStats['moteid_tx'] = []
+        l2txStats['moteid_rx'] = []
+        l2txStats['slotOffset'] = []
+        l2txStats['priority_rx'] = []
+        l2txStats['numDataTx'] = []
+        l2txStats['numDataRx'] = []
+        l2txStats['PDRData'] = []
+        l2txStats['numAckTx'] = []
+        l2txStats['numAckRx'] = []
+        l2txStats['PDRAck'] = []
+        l2txStats['NbHiddenRx'] = []
+        l2txStats['RatioHiddenRx'] = []
+        l2txStats['intrpt_RatioCCA'] = []
+        l2txStats['intrpt_CCA'] = []
+        l2txStats['intrpt_SFD'] = []
 
+  
     # ------- Raw l2 tx -------
     print("-- l2 tx")
 
@@ -216,13 +272,14 @@ def l2tx_compute(datafile, l2txStats):
     l2tx_groupbycellrx_pd = l2tx_pdr_raw_pd.groupby(["moteid_tx","slotOffset", "channelOffset", "moteid_rx"], dropna=True).agg({"asn":"count","priority_rx":"mean", "crc_data":"sum", "ack_tx":"sum", "crc_ack":"sum"}).reset_index().sort_values(by=['slotOffset'])
      
     #print("------")
-    #display(l2tx_pdr_raw_pd)
+    #display(l2tx_pdr_raw_pd[(l2tx_pdr_raw_pd['priority_rx'] > 0)])
     #print("------")
     #display(l2tx_groupbycelltx_pd)
     #print("------")
     #display(l2tx_groupbycellrx_pd)
     #print("------")
-    
+ 
+      
     #identify all the occurences of double ACK tx
     #NB: the joint is symetrical (moteid_rx_x,moteid_rx_y) exists ->  (moteid_rx_y,moteid_rx_x) exists
     hidden_rx_pd = l2tx_pdr_raw_pd[(l2tx_pdr_raw_pd['ack_tx']==True)]
@@ -231,9 +288,16 @@ def l2tx_compute(datafile, l2txStats):
     #display(hidden_rx_pd)
 
 
+    #PARAM_MIN_TX = 0
+      
     #notna = pd.notna(l2tx_groupbycellrx_pd["moteid_rx"])
     for index in l2tx_groupbycellrx_pd.index:
         
+        #print("moteid rx {}, tx {}".format(
+        #            l2tx_groupbycellrx_pd['moteid_rx'][index],
+        #            l2tx_groupbycellrx_pd['moteid_tx'][index]
+        #        ))
+    
         #retrieves the number of txed packets in this cell
         numTx_pd = l2tx_groupbycelltx_pd[(l2tx_groupbycelltx_pd['moteid_tx'] == l2tx_groupbycellrx_pd['moteid_tx'][index]) ].reset_index()
         numTx_pd = numTx_pd[(numTx_pd['slotOffset'] == l2tx_groupbycellrx_pd['slotOffset'][index]) ].reset_index()
@@ -253,7 +317,31 @@ def l2tx_compute(datafile, l2txStats):
             (l2tx_pdr_raw_pd['moteid_tx'] == l2tx_groupbycellrx_pd['moteid_tx'][index]) &
             (l2tx_pdr_raw_pd['priority_rx'] == 0)
             ]
-  
+            
+            #for secondary receivers: ratio CCA / SFD
+            if l2tx_groupbycellrx_pd['priority_rx'][index] > 0:
+                
+                
+                rx_list = l2tx_pdr_raw_pd[
+                        (l2tx_pdr_raw_pd['moteid_rx'] == l2tx_groupbycellrx_pd['moteid_rx'][index]) &
+                        (l2tx_pdr_raw_pd['slotOffset'] == l2tx_groupbycellrx_pd['slotOffset'][index]) &
+                        #(l2tx_pdr_raw_pd['asn'] == l2tx_groupbycellrx_pd['asn'][index])
+                        (l2tx_pdr_raw_pd['moteid_tx'] == l2tx_groupbycellrx_pd['moteid_tx'][index])
+                ]
+                #display(rx_list)
+                
+                CCA_list = rx_list[(rx_list['intrpt'] == "CCA_BUSY")]
+                CCA_nb = len(CCA_list)
+                SFD_list = rx_list[(rx_list['intrpt'] == "STARTOFFRAME")]
+                SFD_nb = len(SFD_list)
+                if (CCA_nb + SFD_nb > 0):
+                    CCA_ratio = CCA_nb/ (CCA_nb + SFD_nb)
+                else:
+                    CCA_ratio = 0
+            else:
+                CCA_nb = 0
+                SFD_nb = 0
+                CCA_ratio = 0
 
             
             l2txStats['nbmotes'].append(datafile['configuration']['nbmotes'])
@@ -270,140 +358,24 @@ def l2tx_compute(datafile, l2txStats):
             l2txStats['numAckRx'].append(l2tx_groupbycellrx_pd['crc_ack'][index])
             l2txStats['PDRAck'].append(l2tx_groupbycellrx_pd['crc_ack'][index] / l2tx_groupbycellrx_pd['ack_tx'][index])
             l2txStats['NbHiddenRx'].append(len(hidden_list))
-            l2txStats['RatioHiddenRx'].append(len(hidden_list) / len(acktx_pd))
+            if (len(acktx_pd) > 0):
+                l2txStats['RatioHiddenRx'].append(len(hidden_list) / len(acktx_pd))
+            else:
+                 l2txStats['RatioHiddenRx'].append(0)
+            l2txStats['intrpt_RatioCCA'].append(CCA_ratio)
+            l2txStats['intrpt_CCA'].append(CCA_nb)
+            l2txStats['intrpt_SFD'].append(SFD_nb)
 
             #print(">>> id{}, offset={}: nbfalsepositive={}".format(
             #            l2tx_groupbycellrx_pd['moteid_rx'][index],
             #            l2tx_groupbycellrx_pd['slotOffset'][index],
             #            len(hidden_list)
             #))
-        
+    
     #print("--------")
- 
-                    
-#plot the figures for cexample stats
-def l2tx_plot(l2txStats):
-    
-    #Panda values (separating anycast and unicast)
-    print("-- l2txStats statistics")
-    l2txStats_pd = pd.DataFrame.from_dict(l2txStats)
-    print(l2txStats_pd)
-    
-    #common sns config
-    sns.set_theme(style="ticks")
-
-    #PDR for acks vs. data packets
-    plot = sns.scatterplot(x='PDRData', y='PDRAck', data=l2txStats_pd)
-    plot.set_xlabel("Packet Delivery Ratio (data)")
-    plot.set_ylabel("Packet Delivery Ratio (ack)")
-    plot.figure.savefig("plots/l2tx_pdr_bidirect.pdf")
-    plot.figure.clf()
-    
-    #hidden receiver problem
-    hidden_pd = l2txStats_pd[(l2txStats_pd['priority_rx'] == 1)];
-    
-    plot = sns.scatterplot(x='PDRData', y='RatioHiddenRx', data=hidden_pd)
-    plot.set_xlabel("Packet Delivery Ratio (data)")
-    plot.set_ylabel("Ratio of False Negatives")
-    plot.set(yscale="log")
-    plot.set(ylim=(1e-3,1))
-    plot.figure.savefig("plots/l2tx_hidden_receiver_falseneg.pdf")
-    plot.figure.clf()
-
-  
-   
-    print("")
-    print("")
+    return l2txStats
     
 
-
-
-
-
-#main (multithreading safe)
-if __name__ == "__main__":
-
-    #parameters
-    directory = init()
-
-    #stats for cexample flows (dictionary to be used later by pandas)
-    flowStats = {}
-    flowStats['cex_src'] = []
-    flowStats['nbmotes'] = []
-    flowStats['cexample_period'] = []
-    flowStats['sixtop_anycast'] = []
-    flowStats['pdr'] = []
-    flowStats['delay_ts'] = []
-    flowStats['delay_ms'] = []
-    flowStats['nb_l2tx_raw'] = []
-    flowStats['nb_l2tx_norm'] = []
-           
-    #stats for l2 frame transmsisions
-    l2txStats = {}
-    l2txStats['nbmotes'] = []
-    l2txStats['cexample_period'] = []
-    l2txStats['sixtop_anycast'] = []
-    l2txStats['moteid_tx'] = []
-    l2txStats['moteid_rx'] = []
-    l2txStats['slotOffset'] = []
-    l2txStats['priority_rx'] = []
-    l2txStats['numDataTx'] = []
-    l2txStats['numDataRx'] = []
-    l2txStats['PDRData'] = []
-    l2txStats['numAckTx'] = []
-    l2txStats['numAckRx'] = []
-    l2txStats['PDRAck'] = []
-    l2txStats['NbHiddenRx'] = []
-    l2txStats['RatioHiddenRx'] = []
-
-
-  
-    for experiment in os.listdir(directory):
-        json_filename = os.path.join(directory, experiment, "stats.json")
-        
-        if os.path.isfile(json_filename) is True:
-            print(json_filename)
-            with open(json_filename) as json_file:
-                datafile = json.load(json_file)
-           
-            #organizes the stats for cexample
-            cexample_compute(datafile, flowStats)
-
-            #compute the stats for l2tx
-            l2tx_compute(datafile, l2txStats)
-
-   
-    #plot the figures for cexample
-    cexample_plot(flowStats)
-    l2tx_plot(l2txStats)
-    
-    
-   
-   
-   
-   
-   
-   
-   
-   
-   
- 
-    #end
-    print("End of the computation")
-    if False:
-        for nbmotes in data:
-            for anycast in data[nbmotes]:
-                print("{0} motes, anycast={1}".format(nbmotes, anycast))
-            
-                for experiment in data[nbmotes][anycast]:
-                    print("   {0}".format(experiment['configuration']))
-                
-                print("")
-                
-            
-            
-            
-    sys.exit(0)
 
 
 

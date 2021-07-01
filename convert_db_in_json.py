@@ -148,10 +148,12 @@ def l2tx_get(con):
     
     cur = con.cursor()
 
+   
     sql_request = 'SELECT dataTX.asn, dataTX.moteid, dataTX.l2dest, dataTX.slotOffset, dataTX.channelOffset, dataTX.shared, dataTX.autoCell, dataTX.buffer_pos, \
     dataRX.moteid, dataRX.priority, dataRX.crc, dataRx.rssi, dataRx.buffer_pos,  \
     ackTX.moteid, \
-    ackRX.crc\
+    ackRX.crc, \
+    INTRPT.intrpt\
     FROM pkt AS dataTX\
     LEFT JOIN(\
         SELECT *\
@@ -171,13 +173,20 @@ def l2tx_get(con):
         WHERE type="ACK" AND event="RX"\
     ) ackRX\
     ON ackTX.moteid = ackRX.l2src AND ackTX.asn=ackRX.asn\
+    LEFT JOIN(\
+        SELECT *\
+        FROM frameInterrupt\
+        WHERE (intrpt="STARTOFFRAME" AND state="S_CCATRIGGER") OR (intrpt="CCA_IDLE" AND state="S_CCATRIGGERED")\
+    )INTRPT\
+    ON INTRPT.asn=dataRX.asn AND INTRPT.moteid=dataRX.moteid\
     WHERE dataTX.type="DATA" AND dataTX.event="TX"'
-    
+
     #print(sql_request)
     for row in cur.execute(sql_request):
         
-        l2tx.append({'asn': row[0], 'moteid_tx':row[1], 'moteid_dest':row[2], 'slotOffset':row[3], 'channelOffset':row[4], 'shared':row[5], 'autoCell':row[6], 'tx_buffer_pos':row[7], 'moteid_rx':row[8],  'priority_rx':row[9], 'crc_data':row[10], 'rssi':row[11], 'rx_buffer_pos':row[12], 'ack_tx':(row[13] is not None), 'crc_ack':row[14]})
-    
+        l2tx.append({'asn': row[0], 'moteid_tx':row[1], 'moteid_dest':row[2], 'slotOffset':row[3], 'channelOffset':row[4], 'shared':row[5], 'autoCell':row[6], 'tx_buffer_pos':row[7], 'moteid_rx':row[8],  'priority_rx':row[9], 'crc_data':row[10], 'rssi':row[11], 'rx_buffer_pos':row[12], 'ack_tx':(row[13] is not None), 'crc_ack':row[14], 'intrpt':row[15]})
+     
+  
     return(l2tx)
         
 
