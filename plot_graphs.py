@@ -102,13 +102,11 @@ def cexample_compute(datafile, flowStats):
         except rxFound as evt:
             pass
     
-    print("Per cexample packet")
+    print("Per cexample flow")
     for value in stats:
        
         #if the stat is significant (synchronized node)
         if (stats[value]['nb_gen'] > PARAM_MIN_TX):
-    
-                
     
             if (stats[value]['nb_rcvd'] > 0):
                 print("{0}: PDR={1}% / delay={2}slots / nbl2tx_eff={3} / nbl2tx_raw={4} / stats={5}".format(
@@ -135,7 +133,7 @@ def cexample_compute(datafile, flowStats):
             flowStats['nbmotes'].append(datafile['configuration']['nbmotes'])
             flowStats['cexample_period'].append(datafile['configuration']['cexample_period'])
             flowStats['sixtop_anycast'].append(datafile['configuration']['sixtop_anycast'])
-            flowStats['pdr'].append(100 * stats[value]['nb_rcvd'] / stats[value]['nb_gen'])
+            flowStats['pdr'].append(stats[value]['nb_rcvd'] / stats[value]['nb_gen'])
             flowStats['nb_l2tx_raw'].append(stats[value]['nb_l2tx'] / stats[value]['nb_gen'])
             if (stats[value]['nb_rcvd'] > 0):
                 flowStats['delay_ts'].append(stats[value]['delay'] / stats[value]['nb_rcvd'])
@@ -155,21 +153,26 @@ def cexample_plot(flowStats):
     #Panda values (separating anycast and unicast)
     print("-- Cexample flows")
     flowStats_pd = pd.DataFrame.from_dict(flowStats)
-    print(flowStats_pd)
+    flowStats_pd = flowStats_pd[flowStats_pd['nbmotes'] < 20].reset_index()
     
     #common sns config
     sns.set_theme(style="ticks")
 
     #PDR
-    plot = sns.violinplot(x='nbmotes', y='pdr', hue='sixtop_anycast',cut=0, data=flowStats_pd)
+    plot = sns.violinplot(x='nbmotes', y='pdr', hue='sixtop_anycast',cut=0, legend_out=True, data=flowStats_pd)
+    plot.legend(handles=plot.legend_.legendHandles, labels=['without anycast', 'with anycast'])
     plot.set_xlabel("Number of motes")
     plot.set_ylabel("Packet Delivery Ratio")
+    #plot.set(yscale="log")
+    #plot.set(ylim=(1e-2,1))
+    plot.set(ylim=(0,1))
     plot.figure.savefig("plots/cexample_pdr.pdf")
     plot.set_xticks(np.arange(50, 100, 10))
     plot.figure.clf()
     
     #PDR
     plot = sns.violinplot(x='nbmotes', y='delay_ms', hue='sixtop_anycast',cut=0,data=flowStats_pd)
+    plot.legend(handles=plot.legend_.legendHandles, labels=['without anycast', 'with anycast'])
     plot.set_xlabel("Number of motes")
     plot.set_ylabel("Delay (in ms)")
     plot.figure.savefig("plots/cexample_delay.pdf")
@@ -177,6 +180,7 @@ def cexample_plot(flowStats):
         
     #Efficiency
     plot = sns.violinplot(x='nbmotes', y='nb_l2tx_raw', hue='sixtop_anycast',cut=0,data=flowStats_pd)
+    plot.legend(handles=plot.legend_.legendHandles, labels=['without anycast', 'with anycast'])
     plot.set_xlabel("Number of motes")
     plot.set_ylabel("Number of transmissions per message")
     plot.figure.savefig("plots/cexample_nb_l2tx.pdf")
@@ -210,15 +214,21 @@ def l2tx_compute(datafile, l2txStats):
     
     #group by RX (to count the of rcvd packets)
     l2tx_groupbycellrx_pd = l2tx_pdr_raw_pd.groupby(["moteid_tx","slotOffset", "channelOffset", "moteid_rx"], dropna=True).agg({"asn":"count","priority_rx":"mean", "crc_data":"sum", "ack_tx":"sum", "crc_ack":"sum"}).reset_index().sort_values(by=['slotOffset'])
+     
+    #print("------")
+    #display(l2tx_pdr_raw_pd)
+    #print("------")
+    #display(l2tx_groupbycelltx_pd)
+    #print("------")
+    #display(l2tx_groupbycellrx_pd)
+    #print("------")
     
-
-    print("------")
-    display(l2tx_groupbycelltx_pd)
-    print("------")
-    print("------")
-    display(l2tx_groupbycellrx_pd)
-    print("------")
-    
+    #identify all the occurences of double ACK tx
+    #NB: the joint is symetrical (moteid_rx_x,moteid_rx_y) exists ->  (moteid_rx_y,moteid_rx_x) exists
+    hidden_rx_pd = l2tx_pdr_raw_pd[(l2tx_pdr_raw_pd['ack_tx']==True)]
+    hidden_rx_pd = hidden_rx_pd.merge(hidden_rx_pd, on= ['asn','slotOffset'])[['asn', 'slotOffset', 'moteid_rx_x', 'moteid_rx_y', 'ack_tx_x', 'ack_tx_y']]
+    hidden_rx_pd = hidden_rx_pd[(hidden_rx_pd['moteid_rx_x'] != hidden_rx_pd['moteid_rx_y'])]
+    #display(hidden_rx_pd)
 
 
     #notna = pd.notna(l2tx_groupbycellrx_pd["moteid_rx"])
@@ -228,10 +238,24 @@ def l2tx_compute(datafile, l2txStats):
         numTx_pd = l2tx_groupbycelltx_pd[(l2tx_groupbycelltx_pd['moteid_tx'] == l2tx_groupbycellrx_pd['moteid_tx'][index]) ].reset_index()
         numTx_pd = numTx_pd[(numTx_pd['slotOffset'] == l2tx_groupbycellrx_pd['slotOffset'][index]) ].reset_index()
         numTx = numTx_pd['asn'].iloc[0]
-                 
           
         #everything in a big array (one line per flow)
         if (numTx > PARAM_MIN_TX) and (l2tx_groupbycellrx_pd['ack_tx'][index] > PARAM_MIN_ACKTX) :
+            
+            #test only on moteid_rx_x since the JOINT is symetrical
+            hidden_list = hidden_rx_pd[
+                        (hidden_rx_pd['moteid_rx_x'] == l2tx_groupbycellrx_pd['moteid_rx'][index]) &
+                        (hidden_rx_pd['slotOffset'] == l2tx_groupbycellrx_pd['slotOffset'][index])
+            ]
+            #nb of acks txed by the primary receiver (for normalization)
+            acktx_pd = l2tx_pdr_raw_pd[
+            (l2tx_pdr_raw_pd['slotOffset'] == l2tx_groupbycellrx_pd['slotOffset'][index]) &
+            (l2tx_pdr_raw_pd['moteid_tx'] == l2tx_groupbycellrx_pd['moteid_tx'][index]) &
+            (l2tx_pdr_raw_pd['priority_rx'] == 0)
+            ]
+  
+
+            
             l2txStats['nbmotes'].append(datafile['configuration']['nbmotes'])
             l2txStats['cexample_period'].append(datafile['configuration']['cexample_period'])
             l2txStats['sixtop_anycast'].append(datafile['configuration']['sixtop_anycast'])
@@ -245,9 +269,16 @@ def l2tx_compute(datafile, l2txStats):
             l2txStats['numAckTx'].append(l2tx_groupbycellrx_pd['ack_tx'][index])
             l2txStats['numAckRx'].append(l2tx_groupbycellrx_pd['crc_ack'][index])
             l2txStats['PDRAck'].append(l2tx_groupbycellrx_pd['crc_ack'][index] / l2tx_groupbycellrx_pd['ack_tx'][index])
-      
+            l2txStats['NbHiddenRx'].append(len(hidden_list))
+            l2txStats['RatioHiddenRx'].append(len(hidden_list) / len(acktx_pd))
+
+            #print(">>> id{}, offset={}: nbfalsepositive={}".format(
+            #            l2tx_groupbycellrx_pd['moteid_rx'][index],
+            #            l2tx_groupbycellrx_pd['slotOffset'][index],
+            #            len(hidden_list)
+            #))
         
-    print("--------")
+    #print("--------")
  
                     
 #plot the figures for cexample stats
@@ -261,13 +292,24 @@ def l2tx_plot(l2txStats):
     #common sns config
     sns.set_theme(style="ticks")
 
-    #PDR
+    #PDR for acks vs. data packets
     plot = sns.scatterplot(x='PDRData', y='PDRAck', data=l2txStats_pd)
     plot.set_xlabel("Packet Delivery Ratio (data)")
     plot.set_ylabel("Packet Delivery Ratio (ack)")
     plot.figure.savefig("plots/l2tx_pdr_bidirect.pdf")
     plot.figure.clf()
     
+    #hidden receiver problem
+    hidden_pd = l2txStats_pd[(l2txStats_pd['priority_rx'] == 1)];
+    
+    plot = sns.scatterplot(x='PDRData', y='RatioHiddenRx', data=hidden_pd)
+    plot.set_xlabel("Packet Delivery Ratio (data)")
+    plot.set_ylabel("Ratio of False Negatives")
+    plot.set(yscale="log")
+    plot.set(ylim=(1e-3,1))
+    plot.figure.savefig("plots/l2tx_hidden_receiver_falseneg.pdf")
+    plot.figure.clf()
+
   
    
     print("")
@@ -311,10 +353,13 @@ if __name__ == "__main__":
     l2txStats['numAckTx'] = []
     l2txStats['numAckRx'] = []
     l2txStats['PDRAck'] = []
+    l2txStats['NbHiddenRx'] = []
+    l2txStats['RatioHiddenRx'] = []
+
 
   
     for experiment in os.listdir(directory):
-        json_filename = os.path.join(directory, experiment, "cexample.json")
+        json_filename = os.path.join(directory, experiment, "stats.json")
         
         if os.path.isfile(json_filename) is True:
             print(json_filename)

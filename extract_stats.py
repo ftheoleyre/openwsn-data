@@ -329,73 +329,74 @@ def cex_l2transmissions_for_cex_packet_bis(con, moteid, buffer_pos, asn_gen, l2t
   
     # do until there is no hop to explore
     try:
-        hop_current = processingQueue.popleft()
+        while True:
+            hop_current = processingQueue.popleft()
 
-        #ASN of deletion
-        #print('SELECT asn FROM queue WHERE moteid="{0}" AND asn>="{1}" AND event="DELETE" AND buffer_pos="{2}" ORDER BY asn ASC '.format(moteid, asn_add, buffer_pos))
-        cur_queue.execute('SELECT asn FROM queue WHERE moteid="{0}" AND asn>="{1}" AND event="DELETE" AND buffer_pos="{2}" ORDER BY asn ASC '.format(hop_current['l2src'], hop_current['asn_add'], hop_current['buffer_pos']))
+            #ASN of deletion
+            #print('SELECT asn FROM queue WHERE moteid="{0}" AND asn>="{1}" AND event="DELETE" AND buffer_pos="{2}" ORDER BY asn ASC '.format(moteid, asn_add, buffer_pos))
+            cur_queue.execute('SELECT asn FROM queue WHERE moteid="{0}" AND asn>="{1}" AND event="DELETE" AND buffer_pos="{2}" ORDER BY asn ASC '.format(hop_current['l2src'], hop_current['asn_add'], hop_current['buffer_pos']))
 
-        #no result -> the packet has not been txed / dropped -> discard it
-        results = cur_queue.fetchall()
-        if (len(results) == 0):
-            break
-        hop_current['asn_del'] = results[0][0]
+            #no result -> the packet has not been txed / dropped -> discard it
+            results = cur_queue.fetchall()
+            if (len(results) == 0):
+                break
+            hop_current['asn_del'] = results[0][0]
 
 
-        receivers = []
-        #get all the packets txed by this mote during this time interval
-        list_pd = l2tx_pd[
-            (l2tx_pd['asn'] >= hop_current['asn_add']) &
-            (l2tx_pd['asn'] <= hop_current['asn_del']) &
-            (l2tx_pd['tx_buffer_pos'] == hop_current['buffer_pos']) &
-            (l2tx_pd['moteid_tx'] == hop_current['l2src'])
-            ]
-        
-        #group by asn (make a distinction between the different retx
-        list_pd = list_pd.groupby('asn')
+            receivers = []
+            #get all the packets txed by this mote during this time interval
+            list_pd = l2tx_pd[
+                (l2tx_pd['asn'] >= hop_current['asn_add']) &
+                (l2tx_pd['asn'] <= hop_current['asn_del']) &
+                (l2tx_pd['tx_buffer_pos'] == hop_current['buffer_pos']) &
+                (l2tx_pd['moteid_tx'] == hop_current['l2src'])
+                ]
+            
+            #group by asn (make a distinction between the different retx
+            list_pd = list_pd.groupby('asn')
 
-        #for each specific timeslot
-        for df_name, df_group in list_pd:
-            #print("ASN: {}".format(df_name))
-            #print("first entry : {}".format(df_group.iloc[0]))
-            #print("------")
-        
-            #by default ack not received
-            ack_rcvd = False
-        
-            #for each receiver for this timeslot
-            for row_index, row in df_group.iterrows():
-            #display(row)
-                
-                if row['moteid_rx'] is not None:
-                    #did it tx an ack ?
-                    if row['ack_tx']:
-                        processingQueue.append({'l2src':row['moteid_rx'], 'buffer_pos':row['rx_buffer_pos'], 'asn_add':row['asn']})
-                        
-                    #did the tx receive the ack?
-                    if row['crc_ack']:
-                        ack_rcvd = True
-                        
-                    receivers.append({
-                    'moteid':row['moteid_rx'],
-                    'crc':int(row['crc_data']),
-                    'rssi':int(row['rssi']),
-                    'buffer_pos':int(row['rx_buffer_pos']),
-                    'priority':int(row['priority_rx']),
-                    'ack_txed':row['ack_tx']
-                    })
+            #for each specific timeslot
+            for df_name, df_group in list_pd:
+                #print("ASN: {}".format(df_name))
+                #print("first entry : {}".format(df_group.iloc[0]))
+                #print("------")
+            
+                #by default ack not received
+                ack_rcvd = False
+            
+                #for each receiver for this timeslot
+                for row_index, row in df_group.iterrows():
+                #display(row)
                     
-            #we have listed everything for this hop
-            l2tx_list.append({
-            'asn':int(df_name),
-            'l2src':hop_current['l2src'],
-            'buffer_pos':int(hop_current['buffer_pos']),
-            'slotOffset':int(df_group.iloc[0]['slotOffset']),
-            'channelOffset':int(df_group.iloc[0]['channelOffset']),
-            'l2dest':df_group.iloc[0]['moteid_dest'],
-            'ack_rcvd':ack_rcvd,
-            'receivers':receivers
-            })
+                    if row['moteid_rx'] is not None:
+                        #did it tx an ack ?
+                        if row['ack_tx']:
+                            processingQueue.append({'l2src':row['moteid_rx'], 'buffer_pos':row['rx_buffer_pos'], 'asn_add':row['asn']})
+                            
+                        #did the tx receive the ack?
+                        if row['crc_ack']:
+                            ack_rcvd = True
+                            
+                        receivers.append({
+                        'moteid':row['moteid_rx'],
+                        'crc':int(row['crc_data']),
+                        'rssi':int(row['rssi']),
+                        'buffer_pos':int(row['rx_buffer_pos']),
+                        'priority':int(row['priority_rx']),
+                        'ack_txed':row['ack_tx']
+                        })
+                        
+                #we have listed everything for this hop
+                l2tx_list.append({
+                'asn':int(df_name),
+                'l2src':hop_current['l2src'],
+                'buffer_pos':int(hop_current['buffer_pos']),
+                'slotOffset':int(df_group.iloc[0]['slotOffset']),
+                'channelOffset':int(df_group.iloc[0]['channelOffset']),
+                'l2dest':df_group.iloc[0]['moteid_dest'],
+                'ack_rcvd':ack_rcvd,
+                'receivers':receivers
+                })
     #the queue is empty
     except IndexError:
         pass
@@ -439,8 +440,8 @@ def cex_packets_end2end(con, l2tx_pd):
     
 
         # will now explore all the transmissions for this cexample packet
-        #cex_packet['l2_transmissions'] = cex_l2transmissions_for_cex_packet_bis(con, moteid, buffer_pos, asn_gen, l2tx_pd)
-        cex_packet['l2_transmissions'] = cex_l2transmissions_for_cex_packet(con, moteid, buffer_pos, asn_gen, l2tx_pd)
+        cex_packet['l2_transmissions'] = cex_l2transmissions_for_cex_packet_bis(con, moteid, buffer_pos, asn_gen, l2tx_pd)
+        #cex_packet['l2_transmissions'] = cex_l2transmissions_for_cex_packet(con, moteid, buffer_pos, asn_gen, l2tx_pd)
        
         
         if cex_packet['l2_transmissions'] is not None:
