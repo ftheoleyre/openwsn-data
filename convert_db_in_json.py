@@ -27,6 +27,9 @@ import argparse
 #maths
 import numpy as np
 
+#strings
+import re   #regular expressions
+
 #FIFO
 from collections import deque
 
@@ -35,10 +38,12 @@ import pandas as pd
 from IPython.display import display
 
 
+
 #Constants
 DEBUG = False
-    
-   
+DB_FILENAME = "openv_events.db"
+JSON_FILENAME = "stats.json"
+TABLES_NAME = ['application', 'config', 'frameInterrupt', 'pkt', 'queue', 'rpl', 'schedule', 'sixtop', 'sixtopStates' ]
 
 
 
@@ -64,6 +69,132 @@ def init():
    
     
     return(args)
+
+
+
+#retrives the table names
+def loadTables(file_out, file_in):
+    db_out = sqlite3.connect(file_out)
+    db_in = sqlite3.connect(file_in)
+
+    tables_in = []
+    cursor_in = db_in.cursor()
+    for row in cursor_in.execute("SELECT name FROM sqlite_master WHERE type='table';"):
+        tables_in.append(row[0])
+        
+    tables_out = []
+    cursor_out = db_out.cursor()
+    for row in cursor_out.execute("SELECT name FROM sqlite_master WHERE type='table';"):
+        tables_out.append(row[0])
+            
+    
+    return db_out, db_in, tables_out, tables_in
+
+
+
+#merge 'in' into 'out'
+def merge(db_out, db_in, tables_out, tables_in):
+    cursor_in = db_in.cursor()
+    cursor_out = db_out.cursor()
+
+    for id_, name, filename in db_in.execute('PRAGMA database_list'):
+        if name == 'main' and filename is not None:
+            print("Merging tables for db {}: ".format(os.path.basename(filename)), end = '')
+            break
+     
+    #for each table
+    for table_name in tables_in:
+
+        #one exists -> copy of in + out in a tmp table + removal + renaming
+        if table_name in tables_out:
+            new_table_name = table_name + "_tmp"
+            try:
+                #copy of the table in out
+                cursor_out.execute("CREATE TABLE IF NOT EXISTS " + new_table_name + " AS SELECT * FROM " + table_name)
+                
+                #copy of in into out
+                for row in cursor_in.execute("SELECT * FROM " + table_name):
+                    #print(row)
+                    cursor_out.execute("INSERT INTO " + new_table_name + " VALUES" + str(row) +";")
+
+                #rename the table with the right name
+                cursor_out.execute("DROP TABLE IF EXISTS " + table_name);
+                cursor_out.execute("ALTER TABLE " + new_table_name + " RENAME TO " + table_name);
+
+            except sqlite3.OperationalError:
+                print("ERROR!: Merge Failed")
+                cursor_out.execute("DROP TABLE IF EXISTS " + new_table_name);
+
+
+        #no table exists -> creation of the schema AND copy
+        else:
+
+            for sql in cursor_in.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='"+ table_name +"'"):
+                cursor_out.execute(sql[0])
+        
+            for row in cursor_in.execute("SELECT * FROM " + table_name):
+                #print(row)
+                cursor_out.execute("INSERT INTO " + table_name + " VALUES" + str(row) +";")
+
+        
+        db_out.commit()
+        #print("{} ".format(table_name), end = '')
+
+    print(".. ok")
+    db_in.close()
+    db_out.close()
+
+    return
+
+
+
+#returns a connection to the global sqlite db
+def dbconn_aggregate_get(directory):
+    db_filename_out = os.path.join(directory, DB_FILENAME)
+    
+    #flush existing db file + connection
+    if os.path.isfile(db_filename_out) is True:
+        os.remove(db_filename_out)
+    dbconn = sqlite3.connect(db_filename_out)
+    return(dbconn)
+  
+  
+
+#merge the indidivudal sqlite dbs in a single one
+def merge_sqllite_db(directory):
+    dbconn = None
+    
+    db_filename_out = os.path.join(directory, DB_FILENAME)
+    
+
+
+    #for all db files
+    for (dirpath, dirnames, db_filenames_in) in os.walk(directory):
+        for db_filename_in in db_filenames_in:
+            
+            #db extension + emulated/m3 portname before a digit
+            if re.search("((emulated[0-9]+)|(m3-[0-9]+.*)).db$", db_filename_in) is not None:
+            
+                #emptydbconn
+                if dbconn is None:
+                    dbconn = dbconn_aggregate_get(directory)
+                    
+                  
+
+            
+                db_out, db_in, tables_out, tables_in = loadTables(db_filename_out, os.path.join(directory, db_filename_in))
+                merge(db_out, db_in, tables_out, tables_in)
+            
+            
+             
+             
+    if dbconn is not None:
+        dbconn.close()
+                
+                
+
+        
+
 
 
 #multithreading is here safe because we NEVER modify the db, we just read it
@@ -164,13 +295,13 @@ def l2tx_get(con):
     LEFT JOIN (\
         SELECT *\
         FROM pkt \
-        WHERE type="ACK" AND event="TX"\
+        WHERE type="ACK" AND event="TX" AND autoCell="0"\
     ) ackTX\
     ON ackTX.moteid = dataRX.moteid AND ackTX.asn=dataRX.asn\
     LEFT JOIN(\
         SELECT *\
         FROM pkt \
-        WHERE type="ACK" AND event="RX"\
+        WHERE type="ACK" AND event="RX" AND autoCell="0"\
     ) ackRX\
     ON ackTX.moteid = ackRX.l2src AND ackTX.asn=ackRX.asn\
     LEFT JOIN(\
@@ -179,7 +310,7 @@ def l2tx_get(con):
         WHERE (intrpt="STARTOFFRAME" AND state="S_CCATRIGGER") OR (intrpt="CCA_IDLE" AND state="S_CCATRIGGERED")\
     )INTRPT\
     ON INTRPT.asn=dataRX.asn AND INTRPT.moteid=dataRX.moteid\
-    WHERE dataTX.type="DATA" AND dataTX.event="TX"'
+    WHERE dataTX.type="DATA" AND dataTX.event="TX" AND dataTX.autoCell="0" AND dataTX.shared="0"' 
 
     #print(sql_request)
     for row in cur.execute(sql_request):
@@ -469,9 +600,10 @@ if __name__ == "__main__":
 
   
     for experiment in os.listdir(args.dir):
-        db_filename = os.path.join(args.dir, experiment, "openv_events.db")
-        json_filename = os.path.join(args.dir, experiment, "stats.json")
-            
+        db_filename = os.path.join(args.dir, experiment, DB_FILENAME)
+        json_filename = os.path.join(args.dir, experiment, JSON_FILENAME)
+          
+                  
         #a db exists, and has not been processed
         to_process = (os.path.isfile(json_filename) is False) or (args.rewrite)
         
@@ -483,9 +615,11 @@ if __name__ == "__main__":
                 args.rewrite
         ))
         
+        merge_sqllite_db(os.path.join(args.dir, experiment))
+        
         
         if (to_process) and (os.path.isfile(db_filename) is True):
-            print("")
+            print("db {}".format(db_filename))
             
             #parameters, etc.
             con = db_create_connection(db_filename)
@@ -530,6 +664,7 @@ if __name__ == "__main__":
             data['configuration']   = configuration_get(con)
             data['configuration']['nbmotes'] = len(motes)
             data['configuration']['experiment'] = experiment
+            
             
             with open(json_filename, 'w') as outfile:
                 json.dump(data, outfile)
