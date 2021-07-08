@@ -46,12 +46,30 @@ import statsTools
 
  
 #fault tolerance graphs
-def fault_plot(flowStats):
+def timePerfs_plot(flowStats):
     
     #Panda values (separating anycast and unicast)
     print("-- flowStats statistics")
     flowStats_pd = pd.DataFrame.from_dict(flowStats)
     print(flowStats_pd)
+
+
+    #delay
+    plot = sns.scatterplot(x='time_min', y='delay_ms', data=flowStats_pd[(flowStats_pd['sixtop_anycast'] == 1)])
+    plot.set_xlabel("#of timeslots since the beginning")
+    plot.set_ylabel("Delay in ms")
+    plot.set(ylim=(0,5000))
+    plot.set(xlim=(0,30))
+    plot.figure.savefig("plots/fault_delay_anycast.pdf")
+    plot.figure.clf()
+
+    plot = sns.scatterplot(x='time_min', y='delay_ms', data=flowStats_pd[(flowStats_pd['sixtop_anycast'] == 0)])
+    plot.set_xlabel("#of timeslots since the beginning")
+    plot.set_ylabel("Delay in ms")
+    plot.set(ylim=(0,5000))
+    plot.set(xlim=(0,30))
+    plot.figure.savefig("plots/fault_delay_noanycast.pdf")
+    plot.figure.clf()
 
 
 
@@ -85,7 +103,7 @@ if __name__ == "__main__":
            
        
     #plot the figures for cexample
-    fault_plot(flowStats)
+    timePerfs_plot(flowStats)
      
     #end
     print("End of the computation")

@@ -36,10 +36,20 @@ from IPython.display import display
 
 
 
+#for real stats
 PARAM_MIN_TX = 70               #discard all the stats where less than X packets have been generated
 PARAM_MIN_ACKTX = 2             # disard flows with not enough ack txed (typically unused secondary receivers
 PARAM_ASN_MARGIN_START = 1000   # discard the last X timeslots (25ms)
 PARAM_ASN_MARGIN_END = 500      # discard the first X timeslots (25ms)
+
+
+#for debuging
+if True:
+    PARAM_MIN_TX = 0               #discard all the stats where less than X packets have been generated
+    PARAM_MIN_ACKTX = 0             # disard flows with not enough ack txed (typically unused secondary receivers
+    PARAM_ASN_MARGIN_START = 0   # discard the last X timeslots (25ms)
+    PARAM_ASN_MARGIN_END = 0      # discard the first X timeslots (25ms)
+
 
 
 class rxFound(Exception):
@@ -58,7 +68,7 @@ def cexample_compute_indiv(experiment, datafile, flowStats):
         flowStats = {}
         flowStats['cex_src'] = []
         flowStats['seqnum'] = []
-        flowStats['asn_gen'] = []
+        flowStats['time_min'] = []
         flowStats['delivered'] = []
         flowStats['delay_ts'] = []
         flowStats['delay_ms'] = []
@@ -102,7 +112,7 @@ def cexample_compute_indiv(experiment, datafile, flowStats):
         
         flowStats['cex_src'].append(cex_packet['cex_src'])
         flowStats['seqnum'].append(cex_packet['seqnum'])
-        flowStats['asn_gen'].append(cex_packet['asn'])
+        flowStats['time_min'].append(cex_packet['asn'] * 25 /(1000*60))
         flowStats['delivered'].append(is_rcvd)
         flowStats['delay_ts'].append(delay_ts)
         flowStats['delay_ms'].append(delay_ts * 25)
@@ -135,6 +145,7 @@ def cexample_compute_agg(experiment, datafile, flowStats):
         flowStats['nbmotes'] = []
         flowStats['cexample_period'] = []
         flowStats['sixtop_anycast'] = []
+        flowStats['nb_gen'] = []
         flowStats['pdr'] = []
         flowStats['delay_ts'] = []
         flowStats['delay_ms'] = []
@@ -148,10 +159,13 @@ def cexample_compute_agg(experiment, datafile, flowStats):
 
     #PDR per source
     stats = {}
+     
     for cex_packet in datafile['cex_packets']:
-        
+    
         #don't handle the packets that have been generated too late or too early
         if cex_packet['asn'] < PARAM_ASN_MARGIN_START or cex_packet['asn'] > datafile['asn_end'] - PARAM_ASN_MARGIN_END :
+        
+            print("discard packets for flow {}".format(cex_packet['cex_src']))
             break
 
         #creates the key for this src device if it doesn't exist yet
@@ -178,35 +192,16 @@ def cexample_compute_agg(experiment, datafile, flowStats):
     
     print("Per cexample flow")
     for value in stats:
-       
         #if the stat is significant (synchronized node)
         if (stats[value]['nb_gen'] > PARAM_MIN_TX):
-    
-            if (stats[value]['nb_rcvd'] > 0):
-                print("{0}: PDR={1}% / delay={2}slots / nbl2tx_eff={3} / nbl2tx_raw={4} / stats={5}".format(
-                value,
-                100 * stats[value]['nb_rcvd'] / stats[value]['nb_gen'] ,
-                stats[value]['delay'] / stats[value]['nb_rcvd'],
-                stats[value]['nb_l2tx'] / stats[value]['nb_rcvd'],
-                stats[value]['nb_l2tx'] / stats[value]['nb_gen'],
-                stats[value]
-                ))
-            else:
-                print("{0}: PDR={1}% / delay={2}slots / nbl2tx_eff={3} / nbl2tx_raw={4} / stats={5}".format(
-                value,
-                100 * stats[value]['nb_rcvd'] / stats[value]['nb_gen'] ,
-                0,
-                0,
-                stats[value]['nb_l2tx'] / stats[value]['nb_gen'],
-                stats[value]
-                ))
+
                 
-            
             #everything in a big array (one line per flow)
             flowStats['cex_src'].append(value)
             flowStats['nbmotes'].append(datafile['configuration']['nbmotes'])
             flowStats['cexample_period'].append(datafile['configuration']['cexample_period'])
             flowStats['sixtop_anycast'].append(datafile['configuration']['sixtop_anycast'])
+            flowStats['nb_gen'].append(stats[value]['nb_gen'])
             flowStats['pdr'].append(stats[value]['nb_rcvd'] / stats[value]['nb_gen'])
             flowStats['nb_l2tx_raw'].append(stats[value]['nb_l2tx'] / stats[value]['nb_gen'])
             if (stats[value]['nb_rcvd'] > 0):
@@ -257,6 +252,11 @@ def l2tx_compute(datafile, l2txStats):
     #Panda values (separating anycast and unicast)
     l2tx_pdr_raw_pd = pd.DataFrame.from_dict(datafile['l2tx'])
 
+    if l2tx_pdr_raw_pd.empty :
+        print("Empty data frame")
+        return(l2txStats)
+
+
     #discard shared and auto cells
     l2tx_pdr_raw_pd = l2tx_pdr_raw_pd[
         (l2tx_pdr_raw_pd['shared'] == 0) &
@@ -268,7 +268,7 @@ def l2tx_compute(datafile, l2txStats):
     #group by TX (to count the  of txed packets)
     l2tx_groupbycelltx_pd = l2tx_pdr_raw_pd.groupby(["moteid_tx","slotOffset", "channelOffset"]).agg({"asn":"count"}).reset_index().sort_values(by=['slotOffset'])
     
-    #group by RX (to count the of rcvd packets)
+    #group by RX (to count the number of rcvd packets)
     l2tx_groupbycellrx_pd = l2tx_pdr_raw_pd.groupby(["moteid_tx","slotOffset", "channelOffset", "moteid_rx"], dropna=True).agg({"asn":"count","priority_rx":"mean", "crc_data":"sum", "ack_tx":"sum", "crc_ack":"sum"}).reset_index().sort_values(by=['slotOffset'])
      
     #print("------")
@@ -283,10 +283,9 @@ def l2tx_compute(datafile, l2txStats):
     #identify all the occurences of double ACK tx
     #NB: the joint is symetrical (moteid_rx_x,moteid_rx_y) exists ->  (moteid_rx_y,moteid_rx_x) exists
     hidden_rx_pd = l2tx_pdr_raw_pd[(l2tx_pdr_raw_pd['ack_tx']==True)]
-    hidden_rx_pd = hidden_rx_pd.merge(hidden_rx_pd, on= ['asn','slotOffset'])[['asn', 'slotOffset', 'moteid_rx_x', 'moteid_rx_y', 'ack_tx_x', 'ack_tx_y']]
+    hidden_rx_pd = hidden_rx_pd.merge(hidden_rx_pd, on= ['asn','slotOffset', 'channelOffset'])[['asn', 'slotOffset', 'moteid_tx_x', 'moteid_rx_x', 'moteid_rx_y', 'ack_tx_x', 'ack_tx_y']]
     hidden_rx_pd = hidden_rx_pd[(hidden_rx_pd['moteid_rx_x'] != hidden_rx_pd['moteid_rx_y'])]
     #display(hidden_rx_pd)
-
 
     #PARAM_MIN_TX = 0
       
@@ -300,7 +299,10 @@ def l2tx_compute(datafile, l2txStats):
     
         #retrieves the number of txed packets in this cell
         numTx_pd = l2tx_groupbycelltx_pd[(l2tx_groupbycelltx_pd['moteid_tx'] == l2tx_groupbycellrx_pd['moteid_tx'][index]) ].reset_index()
-        numTx_pd = numTx_pd[(numTx_pd['slotOffset'] == l2tx_groupbycellrx_pd['slotOffset'][index]) ].reset_index()
+        numTx_pd = numTx_pd[
+            (numTx_pd['slotOffset'] == l2tx_groupbycellrx_pd['slotOffset'][index]) &
+            (numTx_pd['channelOffset'] == l2tx_groupbycellrx_pd['channelOffset'][index])        
+        ].reset_index()
         numTx = numTx_pd['asn'].iloc[0]
           
         #everything in a big array (one line per flow)
@@ -311,6 +313,9 @@ def l2tx_compute(datafile, l2txStats):
                         (hidden_rx_pd['moteid_rx_x'] == l2tx_groupbycellrx_pd['moteid_rx'][index]) &
                         (hidden_rx_pd['slotOffset'] == l2tx_groupbycellrx_pd['slotOffset'][index])
             ]
+            #print("{} -> {}".format(l2tx_groupbycellrx_pd['moteid_tx'][index], l2tx_groupbycellrx_pd['moteid_rx'][index]))
+            #display(hidden_list)
+            
             #nb of acks txed by the primary receiver (for normalization)
             acktx_pd = l2tx_pdr_raw_pd[
             (l2tx_pdr_raw_pd['slotOffset'] == l2tx_groupbycellrx_pd['slotOffset'][index]) &
@@ -365,6 +370,22 @@ def l2tx_compute(datafile, l2txStats):
             l2txStats['intrpt_RatioCCA'].append(CCA_ratio)
             l2txStats['intrpt_CCA'].append(CCA_nb)
             l2txStats['intrpt_SFD'].append(SFD_nb)
+
+
+            if False and len(hidden_list) / len(acktx_pd) > 0.2:
+                print("")
+                print("ratio high: {}: {} idtx {} idrx {} list {}".format(
+                datafile['configuration']['experiment'],
+                len(hidden_list) / len(acktx_pd),
+                l2tx_groupbycellrx_pd['moteid_tx'][index],
+                l2tx_groupbycellrx_pd['moteid_rx'][index],
+                len(hidden_list)
+
+                ))
+                print("--------")
+                print("")
+
+                display(l2tx_groupbycellrx_pd[(l2tx_groupbycellrx_pd['moteid_tx'] == l2tx_groupbycellrx_pd['moteid_tx'][index])])
 
             #print(">>> id{}, offset={}: nbfalsepositive={}".format(
             #            l2tx_groupbycellrx_pd['moteid_rx'][index],

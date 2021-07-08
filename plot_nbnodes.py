@@ -59,16 +59,15 @@ def init():
                     
                     
 #plot the figures for cexample stats
-def cexample_plot(flowStats):
+def cexample_plot(flowStats_pd):
     
     #Panda values (separating anycast and unicast)
     print("-- Cexample flows")
-    flowStats_pd = pd.DataFrame.from_dict(flowStats)
-    flowStats_pd = flowStats_pd[flowStats_pd['nbmotes'] < 20].reset_index()
+    #flowStats_pd = flowStats_pd[flowStats_pd['nbmotes'] < 200].reset_index()
+    
     
     #common sns config
     sns.set_theme(style="ticks")
-
     #PDR
     plot = sns.violinplot(x='nbmotes', y='pdr', hue='sixtop_anycast',cut=0, legend_out=True, data=flowStats_pd)
     plot.legend(handles=plot.legend_.legendHandles, labels=['without anycast', 'with anycast'])
@@ -103,11 +102,10 @@ def cexample_plot(flowStats):
  
                     
 #plot the figures for cexample stats
-def l2tx_plot(l2txStats):
+def l2tx_plot(l2txStats_pd):
     
     #Panda values (separating anycast and unicast)
     print("-- l2txStats statistics")
-    l2txStats_pd = pd.DataFrame.from_dict(l2txStats)
     print(l2txStats_pd)
     
     #common sns config
@@ -135,17 +133,16 @@ def l2tx_plot(l2txStats):
     display(secondaryrx_pd)
     plot.set_xlabel("Packet Delivery Ratio (data)")
     plot.set_ylabel("Ratio CCA / Start of Frame interruptions")
-    #plot.set(yscale="log")
     plot.set(ylim=(0,1))
     plot.figure.savefig("plots/l2tx_ratioCCA-SFD_PDR.pdf")
     plot.figure.clf()
-
+    
+    
     #CCAratio vs. hidden receivers
     plot = sns.scatterplot(x='RatioHiddenRx', y='intrpt_RatioCCA', data=secondaryrx_pd)
     display(secondaryrx_pd)
     plot.set_xlabel("Ratio of false negatives ACK detection (hidden receivers)")
     plot.set_ylabel("Ratio CCA / Start of Frame interruptions")
-    #plot.set(yscale="log")
     plot.set(ylim=(0,1))
     plot.figure.savefig("plots/l2tx_ratioCCA-SFD_hiddenrx.pdf")
     plot.figure.clf()
@@ -185,10 +182,21 @@ if __name__ == "__main__":
             l2txStats = statsTools.l2tx_compute(datafile, l2txStats)
     
     
-   
+    
+    cex_packets_pd = pd.DataFrame.from_dict(datafile['cex_packets'])
+    for index, row in cex_packets_pd[(cex_packets_pd['cex_src'] == '054332ff03d88982')].iterrows():
+        print("seqnum {}".format(row['seqnum']))
+        display(row['l2_transmissions'])
+    
     #plot the figures for cexample
-    cexample_plot(flowStats)
-    l2tx_plot(l2txStats)
+    flowStats_pd = pd.DataFrame.from_dict(flowStats)
+    display(flowStats_pd)
+    #cexample_plot(flowStats_pd)
+
+    #plot the figures for link stats
+    l2txStats_pd = pd.DataFrame.from_dict(l2txStats)
+    display(l2txStats_pd)
+    #l2tx_plot(l2txStats_pd)
     
    
  
