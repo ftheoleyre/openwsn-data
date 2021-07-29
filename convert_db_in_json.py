@@ -40,7 +40,7 @@ from IPython.display import display
 
 
 #Constants
-DEBUG = False
+DEBUG = True
 DB_FILENAME = "openv_events.db"
 JSON_FILENAME = "stats.json"
 TABLES_NAME = ['application', 'config', 'frameInterrupt', 'pkt', 'queue', 'rpl', 'schedule', 'sixtop', 'sixtopStates' ]
@@ -128,7 +128,6 @@ def merge(db_out, db_in, tables_out, tables_in):
 
         #no table exists -> creation of the schema AND copy
         else:
-
             for sql in cursor_in.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='"+ table_name +"'"):
                 cursor_out.execute(sql[0])
         
@@ -405,60 +404,10 @@ def cex_l2transmissions_for_hop(con, l2tx_list, processingQueue, elem):
             print("")
             print("")
  
-#list all the l2 transmissions for a given cexample packet
-def cex_l2transmissions_for_cex_packet(con, moteid, buffer_pos, asn_gen, l2tx_pd):
-    l2tx_list = []
-
-    #list of motes (to be processed) which recived (and will forward) the packet
-    processingQueue = deque()
-    processingQueue.append({'l2src':moteid, 'buffer_pos':buffer_pos, 'asn_add':asn_gen})
-    
-    cur_queue = con.cursor()
-
-    # until the processing queue is empty (each hop that receives this packet is inserted in the FIFO)
-    while (len(processingQueue) > 0):
-        elem = processingQueue.popleft()
-         
-        if DEBUG:
-            print("")
-            print("POP: id={0}, asn={1}".format(elem['l2src'], elem['asn_add']))
-
-
-        #ASN of deletion
-        #print('SELECT asn FROM queue WHERE moteid="{0}" AND asn>="{1}" AND event="DELETE" AND buffer_pos="{2}" ORDER BY asn ASC '.format(moteid, asn_add, buffer_pos))
-        cur_queue.execute('SELECT asn FROM queue WHERE moteid="{0}" AND asn>="{1}" AND event="DELETE" AND buffer_pos="{2}" ORDER BY asn ASC '.format(elem['l2src'], elem['asn_add'], elem['buffer_pos']))
-
-        #no result -> the packet has not been txed / dropped -> discard it
-        results = cur_queue.fetchall()
-        if (len(results) == 0):
-            return None
-        elem['asn_del'] = results[0][0]
-            
-        
-        if (DEBUG):
-            print("Deletion : {0}".format(asn_del))
-         
-         
-        #handle this hop
-        cex_l2transmissions_for_hop(con, l2tx_list, processingQueue, elem)
-      
-
-        #that's the end: all the transmission have been handled for this cexample packet
-        if DEBUG:
-            print("    {0}".format(cex_packet_l2tx))
-         
-        if DEBUG:
-            print("")
-            print("-----------")
-    return(l2tx_list)
- 
- 
- 
- 
                    
 #list all the l2 transmissions for a given mote (packet in the queue of a mote)
 #be careful: a mote may receive the same cex_packet several times, each will constitute a different "hop"
-def cex_l2transmissions_for_cex_packet_bis(con, moteid, buffer_pos, asn_gen, l2tx_pd):
+def cex_l2transmissions_for_cex_packet(con, dagroot_ids, moteid, buffer_pos, asn_gen, l2tx_pd):
 
     l2tx_list = []
     cur_queue = con.cursor()
@@ -472,15 +421,35 @@ def cex_l2transmissions_for_cex_packet_bis(con, moteid, buffer_pos, asn_gen, l2t
         while True:
             hop_current = processingQueue.popleft()
 
+            if hop_current['l2src'] == '054332ff03da8471' :
+                DEBUG= True
+            else:
+                DEBUG = False
+
             #ASN of deletion
-            #print('SELECT asn FROM queue WHERE moteid="{0}" AND asn>="{1}" AND event="DELETE" AND buffer_pos="{2}" ORDER BY asn ASC '.format(moteid, asn_add, buffer_pos))
-            cur_queue.execute('SELECT asn FROM queue WHERE moteid="{0}" AND asn>="{1}" AND event="DELETE" AND buffer_pos="{2}" ORDER BY asn ASC '.format(hop_current['l2src'], hop_current['asn_add'], hop_current['buffer_pos']))
+            sql_query = 'SELECT asn FROM queue WHERE moteid="{0}" AND asn>="{1}" AND event="DELETE" AND buffer_pos="{2}" ORDER BY asn ASC '.format(hop_current['l2src'], hop_current['asn_add'], int(hop_current['buffer_pos']))
+            if DEBUG:
+                print(sql_query)
+            cur_queue.execute(sql_query)
 
             #no result -> the packet has not been txed / dropped -> discard it
             results = cur_queue.fetchall()
             if (len(results) == 0):
+                if DEBUG:
+                    print("no result")
                 break
             hop_current['asn_del'] = results[0][0]
+
+            #impossible to TX and RX the same packet in the same slot -> BUG
+            #TODO
+            if False and hop_current['asn_del'] == hop_current['asn_add'] and hop_current['l2src'] not in dagroot_ids:
+                print("BUG: We cannot have a data packet received and transmitted in the same slot. We have a bug somewhere")
+                print(hop_current)
+                sys.exit(2)
+            
+            if DEBUG:
+                print("      del= {}".format(results[0][0]))
+                print("      bufferpos={}, l2src={}".format(hop_current['buffer_pos'], hop_current['l2src']))
 
 
             receivers = []
@@ -492,21 +461,26 @@ def cex_l2transmissions_for_cex_packet_bis(con, moteid, buffer_pos, asn_gen, l2t
                 (l2tx_pd['moteid_tx'] == hop_current['l2src'])
                 ]
             
+            if DEBUG:
+                print(list_pd)
+           
+           
             #group by asn (make a distinction between the different retx
             list_pd = list_pd.groupby('asn')
+            
+            if DEBUG :
+                display(list_pd)
 
             #for each specific timeslot
             for df_name, df_group in list_pd:
-                #print("ASN: {}".format(df_name))
-                #print("first entry : {}".format(df_group.iloc[0]))
-                #print("------")
             
                 #by default ack not received
                 ack_rcvd = False
             
                 #for each receiver for this timeslot
                 for row_index, row in df_group.iterrows():
-                #display(row)
+                    if DEBUG:
+                        display(row)
                     
                     if row['moteid_rx'] is not None:
                         #did it tx an ack ?
@@ -556,7 +530,7 @@ def cex_l2transmissions_for_cex_packet_bis(con, moteid, buffer_pos, asn_gen, l2t
 
         
 #returns the list of cexample packets, and each corresponding l2 transmission
-def cex_packets_end2end(con, l2tx_pd):
+def cex_packets_end2end(con, dagroot_ids, l2tx_pd):
     cex_packets_stats = []
     
     #handles each cexample packet
@@ -580,9 +554,8 @@ def cex_packets_end2end(con, l2tx_pd):
     
 
         # will now explore all the transmissions for this cexample packet
-        cex_packet['l2_transmissions'] = cex_l2transmissions_for_cex_packet_bis(con, moteid, buffer_pos, asn_gen, l2tx_pd)
-        #cex_packet['l2_transmissions'] = cex_l2transmissions_for_cex_packet(con, moteid, buffer_pos, asn_gen, l2tx_pd)
-       
+        cex_packet['l2_transmissions'] = cex_l2transmissions_for_cex_packet(con, dagroot_ids, moteid, buffer_pos, asn_gen, l2tx_pd)
+        
         
         if cex_packet['l2_transmissions'] is not None:
             cex_packets_stats.append(cex_packet)
@@ -640,7 +613,7 @@ if __name__ == "__main__":
              
             #  ----- CEXAMPLE ----- track tx for each app packet
             l2tx_pd = pd.DataFrame.from_dict(l2tx)
-            cex_packets = cex_packets_end2end(con, l2tx_pd)
+            cex_packets = cex_packets_end2end(con, dagroot_ids, l2tx_pd)
 
             print("Nb. Cexample packets={}".format(len(cex_packets)))
 

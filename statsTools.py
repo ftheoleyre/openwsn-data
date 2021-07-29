@@ -161,12 +161,21 @@ def cexample_compute_agg(experiment, datafile, flowStats):
     stats = {}
      
     for cex_packet in datafile['cex_packets']:
+        if cex_packet['cex_src'] == '054332ff03d9a968':
+            DEBUG = True
+        else:
+            DEBUG = False
+    
     
         #don't handle the packets that have been generated too late or too early
         if cex_packet['asn'] < PARAM_ASN_MARGIN_START or cex_packet['asn'] > datafile['asn_end'] - PARAM_ASN_MARGIN_END :
         
             print("discard packets for flow {}".format(cex_packet['cex_src']))
             break
+
+        if DEBUG:
+            print(cex_packet)
+
 
         #creates the key for this src device if it doesn't exist yet
         if cex_packet['cex_src'] in stats:
@@ -179,17 +188,34 @@ def cexample_compute_agg(experiment, datafile, flowStats):
             stats[cex_packet['cex_src']]['nb_l2tx'] = 0
         
         try:
+            if DEBUG:
+                print("seqnum={}/asn={}".format(cex_packet['seqnum'], cex_packet['asn']))
+                
+                for elem in cex_packet['l2_transmissions']:
+                    print("    src={}, asnTx={}, receivers:".format(elem['l2src'], elem['asn']))
+                    for elem2 in elem['receivers']:
+                        print("       {}".format(elem2))
+        
             stats[cex_packet['cex_src']]['nb_l2tx'] += len(cex_packet['l2_transmissions'])
             for l2tx in cex_packet['l2_transmissions']:
                 for rcvr in l2tx['receivers']:
                     if rcvr['moteid'] in datafile['dagroot_ids'] :
+                        if (DEBUG):
+                            print("{} ===== {}".format(rcvr['moteid'], datafile['dagroot_ids']))
                         stats[cex_packet['cex_src']]['nb_rcvd'] += 1 #stats[cex_packet['cex_src']]['nb_rcvd'] +1
                         stats[cex_packet['cex_src']]['delay'] += l2tx['asn'] - cex_packet['asn']
                         raise(rxFound)
+                    elif DEBUG:
+                        print("{} != {}".format(rcvr['moteid'], datafile['dagroot_ids']))
         #we found one of the dagroot ids -> pass to the next cex packet
         except rxFound as evt:
             pass
-    
+        
+        if DEBUG:
+            print("")
+            print("")
+            print("")
+
     print("Per cexample flow")
     for value in stats:
         #if the stat is significant (synchronized node)
