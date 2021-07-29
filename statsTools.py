@@ -161,7 +161,7 @@ def cexample_compute_agg(experiment, datafile, flowStats):
     stats = {}
      
     for cex_packet in datafile['cex_packets']:
-        if cex_packet['cex_src'] == '054332ff03d9a968':
+        if cex_packet['cex_src'] == '44054332ff03dab369':
             DEBUG = True
         else:
             DEBUG = False

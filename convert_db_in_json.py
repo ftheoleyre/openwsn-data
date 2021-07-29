@@ -294,13 +294,13 @@ def l2tx_get(con):
     LEFT JOIN (\
         SELECT *\
         FROM pkt \
-        WHERE type="ACK" AND event="TX" AND autoCell="0"\
+        WHERE type="ACK" AND event="TX"\
     ) ackTX\
     ON ackTX.moteid = dataRX.moteid AND ackTX.asn=dataRX.asn\
     LEFT JOIN(\
         SELECT *\
         FROM pkt \
-        WHERE type="ACK" AND event="RX" AND autoCell="0"\
+        WHERE type="ACK" AND event="RX"\
     ) ackRX\
     ON ackTX.moteid = ackRX.l2src AND ackTX.asn=ackRX.asn\
     LEFT JOIN(\
@@ -309,9 +309,12 @@ def l2tx_get(con):
         WHERE (intrpt="STARTOFFRAME" AND state="S_CCATRIGGER") OR (intrpt="CCA_IDLE" AND state="S_CCATRIGGERED")\
     )INTRPT\
     ON INTRPT.asn=dataRX.asn AND INTRPT.moteid=dataRX.moteid\
-    WHERE dataTX.type="DATA" AND dataTX.event="TX" AND dataTX.autoCell="0" AND dataTX.shared="0"' 
+    WHERE dataTX.type="DATA" AND dataTX.event="TX" '
+
+
 
     #print(sql_request)
+    
     for row in cur.execute(sql_request):
         
         l2tx.append({'asn': row[0], 'moteid_tx':row[1], 'moteid_dest':row[2], 'slotOffset':row[3], 'channelOffset':row[4], 'shared':row[5], 'autoCell':row[6], 'tx_buffer_pos':row[7], 'moteid_rx':row[8],  'priority_rx':row[9], 'crc_data':row[10], 'rssi':row[11], 'rx_buffer_pos':row[12], 'ack_tx':(row[13] is not None), 'crc_ack':row[14], 'intrpt':row[15]})
@@ -407,7 +410,7 @@ def cex_l2transmissions_for_hop(con, l2tx_list, processingQueue, elem):
                    
 #list all the l2 transmissions for a given mote (packet in the queue of a mote)
 #be careful: a mote may receive the same cex_packet several times, each will constitute a different "hop"
-def cex_l2transmissions_for_cex_packet(con, dagroot_ids, moteid, buffer_pos, asn_gen, l2tx_pd):
+def cex_l2transmissions_for_cex_packet(con, cex_packet, dagroot_ids, moteid, buffer_pos, asn_gen, l2tx_pd):
 
     l2tx_list = []
     cur_queue = con.cursor()
@@ -421,14 +424,21 @@ def cex_l2transmissions_for_cex_packet(con, dagroot_ids, moteid, buffer_pos, asn
         while True:
             hop_current = processingQueue.popleft()
 
-            if hop_current['l2src'] == '054332ff03da8471' :
-                DEBUG= True
+            if cex_packet['cex_src'] == '44054332ff03dab369':
+                DEBUG = True
+                print("")
+                print("--------------------------")
+                print("")
+                print("")
             else:
                 DEBUG = False
+
+
 
             #ASN of deletion
             sql_query = 'SELECT asn FROM queue WHERE moteid="{0}" AND asn>="{1}" AND event="DELETE" AND buffer_pos="{2}" ORDER BY asn ASC '.format(hop_current['l2src'], hop_current['asn_add'], int(hop_current['buffer_pos']))
             if DEBUG:
+                print("{} seqnum={} asn={}".format(cex_packet['cex_src'], cex_packet['seqnum'], cex_packet['asn'])   )
                 print(sql_query)
             cur_queue.execute(sql_query)
 
@@ -451,6 +461,7 @@ def cex_l2transmissions_for_cex_packet(con, dagroot_ids, moteid, buffer_pos, asn
                 print("      del= {}".format(results[0][0]))
                 print("      bufferpos={}, l2src={}".format(hop_current['buffer_pos'], hop_current['l2src']))
 
+        
 
             receivers = []
             #get all the packets txed by this mote during this time interval
@@ -461,10 +472,7 @@ def cex_l2transmissions_for_cex_packet(con, dagroot_ids, moteid, buffer_pos, asn
                 (l2tx_pd['moteid_tx'] == hop_current['l2src'])
                 ]
             
-            if DEBUG:
-                print(list_pd)
-           
-           
+        
             #group by asn (make a distinction between the different retx
             list_pd = list_pd.groupby('asn')
             
@@ -554,7 +562,7 @@ def cex_packets_end2end(con, dagroot_ids, l2tx_pd):
     
 
         # will now explore all the transmissions for this cexample packet
-        cex_packet['l2_transmissions'] = cex_l2transmissions_for_cex_packet(con, dagroot_ids, moteid, buffer_pos, asn_gen, l2tx_pd)
+        cex_packet['l2_transmissions'] = cex_l2transmissions_for_cex_packet(con, cex_packet, dagroot_ids, moteid, buffer_pos, asn_gen, l2tx_pd)
         
         
         if cex_packet['l2_transmissions'] is not None:
