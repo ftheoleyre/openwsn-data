@@ -7,6 +7,7 @@ This repository helps to analyse the data produced by openwsn-fw (https://github
 # Installation
 
 The scripts support Python3. More precisely, you can install the dependencies with conda:
+
 `conda env create -f openwsn-data.yml`
 
 # Preprocessing
