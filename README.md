@@ -1,4 +1,7 @@
-# openwsn-data: objective
+# openwsn-data
+
+![](https://img.shields.io/badge/python-3.9-green)
+
 
 This repository helps to analyse the data produced by openwsn-fw (https://github.com/ftheoleyre/openwsn-fw/tree/CCA) and openvisualizer (https://github.com/ftheoleyre/openvisualizer).
 
