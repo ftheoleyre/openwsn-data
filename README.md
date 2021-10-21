@@ -4,6 +4,11 @@ This repository helps to analyse the data produced by openwsn-fw (https://github
 
 
 
+# Installation
+
+The scripts support Python3. More precisely, you can install the dependencies with conda:
+`conda env create -f openwsn-data.yml`
+
 # Preprocessing
 
 First you have to prepare the sqlite db files produced by openvisualizer with the following command:
@@ -23,18 +28,29 @@ It works as following
 By default, the script doesn't re-process the pre-processed directory (with an existing `stats.json` file). We can force the reprocessing with the option: `--rewrite`
 
 
+# Scenarios
 
-# Fault Tolerance scenario
+The data pipeline has been designed to procude statistics for two different scenarios:
 
-The directory MUST be pre-processed before extracting data.
+* fault-tolerance: one of the nodes is turned-off, and the reliability and delay metrics are plotted (x-cordinate = time);
+* sclability: a large collection of experiments is runned, with different number of nodes. Different metrics (reliability, delay, nb of transmissions, etc.) are then plotted (x-coordinate = # nodes). 
+
+The directory that contains the raw results of the experiments MUST be pre-processed before extracting data:
 
 `python plot_faultolerance.py --dir XXX`
 
-The script extracts the delay of reception of each cexample packet for two scenarios (with and without CCA). Two different figures are plotted to represent the distribution of the delay according to the experiment time (when the fault happens, the delay shall increase, or the packets may event stop to be delivered).
 
 
+## Fault Tolerance scenario
 
-# Scalability scenario
+
+The script:
+
+* extracts the delay of reception of each cexample packet for two scenarios (with and without CCA). 
+* plots two different figures to represent the distribution of the delay according to the experiment time.
+
+
+## Scalability scenario
 
 The script plots:
 
